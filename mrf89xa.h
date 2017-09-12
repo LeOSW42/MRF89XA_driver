@@ -46,11 +46,11 @@ typedef struct mrf_frame {
 /*
     http://elinux.org/RPi_BCM2835_GPIOs
 */
-#define CSCON_PIN 23
-#define RESET_PIN 22
-#define DATA_PIN  25
-#define IRQ0_PIN  24
-#define IRQ1_PIN  8
+#define CSCON_PIN 9
+#define RESET_PIN 43
+#define DATA_PIN  42
+#define IRQ0_PIN  36
+#define IRQ1_PIN  40
 
 /* in microseconds */
 #define RESET_DELAY 100
