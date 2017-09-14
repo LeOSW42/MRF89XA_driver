@@ -5,6 +5,8 @@
 
 #include <linux/ioctl.h>
 
+#define MRF_DEBUG
+
 #define MRF_BROADCAST_NODEADDR 0x00
 #define MRF_FREQ_863_74 ( (114 << 3*8) | (90 << 2*8) | (73 << 1*8))
 
@@ -21,21 +23,21 @@
 #define MRF_MAX_TX_QUEUE 10
 #define MRF_MAX_RX_QUEUE 10
 
-typedef struct mrf_address {
+typedef struct mrf89xa_address {
   uint8_t node_id;
   uint32_t network_id;
-} mrf_address;
+} mrf89xa_address;
 
 
-typedef struct mrf_frame {
+typedef struct mrf89xa_frame {
   uint8_t addr;
   uint8_t data[MRF_MAX_PAYLOAD];
-} mrf_frame;
+} mrf89xa_frame;
 
 #define MRF_IOC_MAGIC 'n'
 
 #define MRF_IOC_RESET    _IO(MRF_IOC_MAGIC, 0)
-#define MRF_IOC_SETADDR  _IOW(MRF_IOC_MAGIC, 1, mrf_address)
+#define MRF_IOC_SETADDR  _IOW(MRF_IOC_MAGIC, 1, mrf89xa_address)
 #define MRF_IOC_SETFREQ  _IO(MRF_IOC_MAGIC, 2)
 #define MRF_IOC_SETPOWER _IO(MRF_IOC_MAGIC, 3)
 #define MRF_IOC_LISTEN   _IO(MRF_IOC_MAGIC, 4)
@@ -69,7 +71,7 @@ typedef struct mrf_frame {
 #define MRF_STATE_LISTENING       (1 << 5)
 
 #ifdef MRF_DEBUG
-#define MRF_PRINT_DEBUG(fmt, args...) printk( KERN_INFO "mrf: " fmt, ## args)
+#define MRF_PRINT_DEBUG(fmt, args...) printk( KERN_INFO "mrf89xa: " fmt, ## args)
 #else
 #define MRF_PRINT_DEBUG(fmt, args...) /* do nothing */
 #endif

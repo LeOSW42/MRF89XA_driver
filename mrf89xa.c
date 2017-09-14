@@ -33,9 +33,9 @@
 
 #define DRV_NAME "mrf89xa"
 
-#define TX_WORKQUEUE_NAME "mrf-tx-wq"
+#define TX_WORKQUEUE_NAME "mrf89xa-tx-wq"
 
-long mrf_ioctl_unlocked(struct file *filp, unsigned int cmd, unsigned long arg);
+long mrf89xa_ioctl_unlocked(struct file *filp, unsigned int cmd, unsigned long arg);
 static int write_register(u8 index, u8 value);
 static u8 read_register(u8 index);
 static irqreturn_t irq0_handler(int, void *);
@@ -64,7 +64,7 @@ module_param(ignore_registers, int, S_IRUGO);
 MODULE_PARM_DESC(ignore_registers, "Ignore initial register values on probe.");
 
 
-struct mrf_dev {
+struct mrf89xa_dev {
   struct cdev cdev;
   spinlock_t state_lock;
   uint32_t state;
@@ -96,16 +96,16 @@ struct mrf_dev {
   struct workqueue_struct *tx_worker;
 };
 
-/* mimics mrf_frame, but embeds size and list */
-struct mrf_payload {
+/* mimics mrf89xa_frame, but embeds size and list */
+struct mrf89xa_payload {
   u8 addr;
   u8 size;
   u8 data[PAYLOAD_64];
   struct list_head list_item;
 };
 
-struct mrf_dev *mrf_device = NULL;
-static const char* mrf_device_name = DRV_NAME;
+struct mrf89xa_dev *mrf89xa_device = NULL;
+static const char* mrf89xa_device_name = DRV_NAME;
 
 DECLARE_WORK(tx_processor, transfer_work);
 DECLARE_WORK(rx_switcher, rx_switch_work);
@@ -148,18 +148,18 @@ static u8 default_register_values[] = {
   /* 31 == REG_FCRC        */ FIFO_AUTOCLR_ON | FIFO_STBY_ACCESS_WRITE,
 };
 
-static int mrf_open(struct inode *inode, struct file *filp) {
+static int mrf89xa_open(struct inode *inode, struct file *filp) {
   int status;
   int state;
   struct gpio_desc *irq1_desc;
 
-  MRF_PRINT_DEBUG("open device %p\n", mrf_device);
+  MRF_PRINT_DEBUG("open device %p\n", mrf89xa_device);
 
-  down(&mrf_device->driver_semaphore);
+  down(&mrf89xa_device->driver_semaphore);
 
-  spin_lock(&mrf_device->state_lock);
-  state = mrf_device->state;
-  spin_unlock(&mrf_device->state_lock);
+  spin_lock(&mrf89xa_device->state_lock);
+  state = mrf89xa_device->state;
+  spin_unlock(&mrf89xa_device->state_lock);
 
 
   if (! (state & MRF_STATE_DEVICEOPENED) ) {
@@ -168,18 +168,18 @@ static int mrf_open(struct inode *inode, struct file *filp) {
     irq0 = gpio_to_irq(IRQ0_PIN);
     if (irq0 < 0) {
       status = irq0;
-      printk(KERN_WARNING "mrf: cannot get irq0 via %d pin (status: %d)\n", IRQ0_PIN, status);
+      printk(KERN_WARNING "mrf89xa: cannot get irq0 via %d pin (status: %d)\n", IRQ0_PIN, status);
       goto finish;
     }
-    status = request_irq(irq0, &irq0_handler, 0, mrf_device_name, mrf_device);
+    status = request_irq(irq0, &irq0_handler, 0, mrf89xa_device_name, mrf89xa_device);
     if (status) goto finish;
-    mrf_device->irq0 = irq0;
+    mrf89xa_device->irq0 = irq0;
     MRF_PRINT_DEBUG("irq0 %d\n", irq0);
 
 
     irq1_desc = gpio_to_desc(IRQ1_PIN);
     if (IS_ERR_OR_NULL(irq1_desc)) {
-      printk(KERN_INFO "mrf: irq1 pin (%d) not found", IRQ1_PIN);
+      printk(KERN_INFO "mrf89xa: irq1 pin (%d) not found", IRQ1_PIN);
       goto finish;
     }
     status = gpiod_direction_input(irq1_desc);
@@ -190,22 +190,22 @@ static int mrf_open(struct inode *inode, struct file *filp) {
     irq1 = gpiod_to_irq(irq1_desc);
     if (irq1 < 0) {
       status = irq1;
-      printk(KERN_WARNING "mrf: cannot get irq1 via %d pin (status: %d)\n", IRQ1_PIN, status);
+      printk(KERN_WARNING "mrf89xa: cannot get irq1 via %d pin (status: %d)\n", IRQ1_PIN, status);
       goto finish;
     }
 
     status = request_irq(irq1, &irq1_handler,
                          IRQF_TRIGGER_RISING,
-                         mrf_device_name, mrf_device);
+                         mrf89xa_device_name, mrf89xa_device);
     if (status) goto finish;
-    mrf_device->irq1 = irq1;
+    mrf89xa_device->irq1 = irq1;
     MRF_PRINT_DEBUG("irq1 %d\n", irq1);
 
     try_module_get(THIS_MODULE);
 
-    spin_lock(&mrf_device->state_lock);
-    mrf_device->state |= MRF_STATE_DEVICEOPENED;
-    spin_unlock(&mrf_device->state_lock);
+    spin_lock(&mrf89xa_device->state_lock);
+    mrf89xa_device->state |= MRF_STATE_DEVICEOPENED;
+    spin_unlock(&mrf89xa_device->state_lock);
 
     status = 0; /* success */
   } else {
@@ -213,75 +213,75 @@ static int mrf_open(struct inode *inode, struct file *filp) {
   }
 
  finish:
-  up(&mrf_device->driver_semaphore);
+  up(&mrf89xa_device->driver_semaphore);
   if (status) { /* error */
-    if (mrf_device->irq0) free_irq(mrf_device->irq0, mrf_device);
-    if (mrf_device->irq1) free_irq(mrf_device->irq1, mrf_device);
+    if (mrf89xa_device->irq0) free_irq(mrf89xa_device->irq0, mrf89xa_device);
+    if (mrf89xa_device->irq1) free_irq(mrf89xa_device->irq1, mrf89xa_device);
     module_put(THIS_MODULE);
   }
 
   return status;
 }
 
-static int mrf_release(struct inode *inode, struct file *filp) {
-  struct mrf_payload *frame, *tmp_frame;
-  MRF_PRINT_DEBUG("release device, queue_size = %d\n", atomic_read(&mrf_device->tx_queue_size));
-  down(&mrf_device->driver_semaphore);
+static int mrf89xa_release(struct inode *inode, struct file *filp) {
+  struct mrf89xa_payload *frame, *tmp_frame;
+  MRF_PRINT_DEBUG("release device, queue_size = %d\n", atomic_read(&mrf89xa_device->tx_queue_size));
+  down(&mrf89xa_device->driver_semaphore);
 
   /* wait until tx queue be empty */
-  wait_event(mrf_device->tx_wait_queue, atomic_read(&mrf_device->tx_queue_size) == 0);
+  wait_event(mrf89xa_device->tx_wait_queue, atomic_read(&mrf89xa_device->tx_queue_size) == 0);
   /* wait until all frames will be actually sent */
 
-  wait_event(mrf_device->device_wait_queue, atomic_read(&mrf_device->device_busy) == 0);
+  wait_event(mrf89xa_device->device_wait_queue, atomic_read(&mrf89xa_device->device_busy) == 0);
 
   _device_acquire();
   if (set_chip_mode(CHIPMODE_STBYMODE)) {
     printk(KERN_WARNING "error switch to stand-by mode");
   }
 
-  free_irq(mrf_device->irq0, mrf_device);
-  free_irq(mrf_device->irq1, mrf_device);
+  free_irq(mrf89xa_device->irq0, mrf89xa_device);
+  free_irq(mrf89xa_device->irq1, mrf89xa_device);
   _device_release();
 
   /* release all received frames */
-  spin_lock(&mrf_device->rx_queue_lock);
-  list_for_each_entry_safe(frame, tmp_frame, &mrf_device->rx_queue, list_item) {
+  spin_lock(&mrf89xa_device->rx_queue_lock);
+  list_for_each_entry_safe(frame, tmp_frame, &mrf89xa_device->rx_queue, list_item) {
     list_del(&frame->list_item);
     kfree(frame);
   }
-  spin_unlock(&mrf_device->rx_queue_lock);
+  spin_unlock(&mrf89xa_device->rx_queue_lock);
 
   module_put(THIS_MODULE);
 
   MRF_PRINT_DEBUG("release device, 4\n");
-  spin_lock(&mrf_device->state_lock);
-  mrf_device->state &= ~(MRF_STATE_DEVICEOPENED);
-  spin_unlock(&mrf_device->state_lock);
+  spin_lock(&mrf89xa_device->state_lock);
+  mrf89xa_device->state &= ~(MRF_STATE_DEVICEOPENED);
+  spin_unlock(&mrf89xa_device->state_lock);
 
-  up(&mrf_device->driver_semaphore);
+  up(&mrf89xa_device->driver_semaphore);
   return 0;
 }
 
-static ssize_t mrf_write(struct file *filp, const char *buff, size_t length, loff_t * offset) {
+static ssize_t mrf89xa_write(struct file *filp, const char *buff, size_t length, loff_t * offset) {
   int status;
   int data_size;
   u8 dest;
   int queue_size = -1;
-  struct mrf_payload *payload = NULL;
+  struct mrf89xa_payload *payload = NULL;
 
-  down(&mrf_device->driver_semaphore);
+  down(&mrf89xa_device->driver_semaphore);
 
   /* queue size could extrenally be decreased only */
-  if ((filp->f_flags & O_NONBLOCK) && (atomic_read(&mrf_device->tx_queue_size) >= MRF_MAX_TX_QUEUE)) {
+  if ((filp->f_flags & O_NONBLOCK) && (atomic_read(&mrf89xa_device->tx_queue_size) >= MRF_MAX_TX_QUEUE)) {
     status = -EAGAIN;
     goto finish;
   }
 
   /* check input data */
-  data_size = length - sizeof(((mrf_frame*)0)->addr);
+  data_size = length - sizeof(((mrf89xa_frame*)0)->addr);
   if (data_size <= 0) {
     /* nothing to send? */
-    printk(KERN_WARNING "mrf: write: wrong data size %d)\n", data_size);
+    printk(KERN_WARNING "mrf89xa: write: wrong data size %d)\n", data_size);
     status = -EINVAL;
     goto finish;
   }
@@ -289,7 +289,7 @@ static ssize_t mrf_write(struct file *filp, const char *buff, size_t length, lof
     status = -EFAULT;
     goto finish;
   }
-  payload = kzalloc(sizeof(struct mrf_payload), GFP_KERNEL);
+  payload = kzalloc(sizeof(struct mrf89xa_payload), GFP_KERNEL);
   if ( !payload ) {
     status = -ENOMEM;
     goto finish;
@@ -309,45 +309,45 @@ static ssize_t mrf_write(struct file *filp, const char *buff, size_t length, lof
 
   /* wait until there will be enought space in queue */
   if (!(filp->f_flags & O_NONBLOCK)) {
-    wait_event(mrf_device->tx_wait_queue, atomic_read(&mrf_device->tx_queue_size) < MRF_MAX_TX_QUEUE);
+    wait_event(mrf89xa_device->tx_wait_queue, atomic_read(&mrf89xa_device->tx_queue_size) < MRF_MAX_TX_QUEUE);
   }
 
-  spin_lock(&mrf_device->tx_queue_lock);
-  list_add_tail(&payload->list_item, &mrf_device->tx_queue);
-  spin_unlock(&mrf_device->tx_queue_lock);
+  spin_lock(&mrf89xa_device->tx_queue_lock);
+  list_add_tail(&payload->list_item, &mrf89xa_device->tx_queue);
+  spin_unlock(&mrf89xa_device->tx_queue_lock);
 
-  queue_size = atomic_inc_return(&mrf_device->tx_queue_size);
+  queue_size = atomic_inc_return(&mrf89xa_device->tx_queue_size);
 
   if (queue_size == 1) {
     /* if queue_size is greater, than worker is alrady in progress */
-    queue_work(mrf_device->tx_worker, &tx_processor);
+    queue_work(mrf89xa_device->tx_worker, &tx_processor);
   }
   status = length;
 
  finish:
-  up(&mrf_device->driver_semaphore);
+  up(&mrf89xa_device->driver_semaphore);
   if (status <0 && payload) kfree(payload);
   MRF_PRINT_DEBUG(" write status = %d, queue size = %d, length = %d\n",
          status, queue_size, length);
   return status;
 }
 
-static ssize_t mrf_read(struct file *filp, char *buff, size_t length, loff_t *offset) {
+static ssize_t mrf89xa_read(struct file *filp, char *buff, size_t length, loff_t *offset) {
   int status= 0;
-  mrf_frame *frame;
-  struct mrf_payload *payload = NULL;
+  mrf89xa_frame *frame;
+  struct mrf89xa_payload *payload = NULL;
   MRF_PRINT_DEBUG("reading from device\n");
 
-  down(&mrf_device->driver_semaphore);
+  down(&mrf89xa_device->driver_semaphore);
   /* queue size could extrenally be decreased only */
-  if ((filp->f_flags & O_NONBLOCK) && (atomic_read(&mrf_device->rx_queue_size) == 0)) {
+  if ((filp->f_flags & O_NONBLOCK) && (atomic_read(&mrf89xa_device->rx_queue_size) == 0)) {
     status = -EAGAIN;
     goto finish;
   }
 
   /* check input data */
-  if (length != sizeof(mrf_frame)) {
-    printk(KERN_WARNING "mrf: read: wrong data size %d)\n", length);
+  if (length != sizeof(mrf89xa_frame)) {
+    printk(KERN_WARNING "mrf89xa: read: wrong data size %d)\n", length);
     status = -EINVAL;
     goto finish;
   }
@@ -355,15 +355,15 @@ static ssize_t mrf_read(struct file *filp, char *buff, size_t length, loff_t *of
     status = -EFAULT;
     goto finish;
   }
-  frame = (mrf_frame*) buff;
+  frame = (mrf89xa_frame*) buff;
 
-  wait_event(mrf_device->rx_wait_queue, atomic_read(&mrf_device->rx_queue_size) > 0);
+  wait_event(mrf89xa_device->rx_wait_queue, atomic_read(&mrf89xa_device->rx_queue_size) > 0);
 
-  spin_lock(&mrf_device->rx_queue_lock);
-  payload = list_first_entry(&mrf_device->rx_queue, struct mrf_payload, list_item);
+  spin_lock(&mrf89xa_device->rx_queue_lock);
+  payload = list_first_entry(&mrf89xa_device->rx_queue, struct mrf89xa_payload, list_item);
   list_del(&payload->list_item);
-  atomic_dec(&mrf_device->rx_queue_size);
-  spin_unlock(&mrf_device->rx_queue_lock);
+  atomic_dec(&mrf89xa_device->rx_queue_size);
+  spin_unlock(&mrf89xa_device->rx_queue_lock);
 
   status = __put_user(payload->addr, &frame->addr);
   if (status) { goto finish; }
@@ -374,15 +374,15 @@ static ssize_t mrf_read(struct file *filp, char *buff, size_t length, loff_t *of
   }
 
   /* all OK */
-  status = payload->size + sizeof(((mrf_frame*)0)->addr);
+  status = payload->size + sizeof(((mrf89xa_frame*)0)->addr);
 
  finish:
   if (payload) kfree(payload);
-  up(&mrf_device->driver_semaphore);
+  up(&mrf89xa_device->driver_semaphore);
   return status;
 }
 
-static int mrf_dump_stats(struct seq_file *m, void *v){
+static int mrf89xa_dump_stats(struct seq_file *m, void *v){
   int i, j;
   u8 regs[32];
   u8 mode_id;
@@ -391,7 +391,7 @@ static int mrf_dump_stats(struct seq_file *m, void *v){
   const char* mode;
   struct gpio_desc *irq_pins[2];
 
-  down(&mrf_device->driver_semaphore);
+  down(&mrf89xa_device->driver_semaphore);
 
   /* print all 32 registers, 4 per row */
   for (i = 0; i < 32; i++) {
@@ -430,14 +430,14 @@ static int mrf_dump_stats(struct seq_file *m, void *v){
 
   irq_pins[0] = gpio_to_desc(IRQ0_PIN);
   if (IS_ERR_OR_NULL(irq_pins[0])) {
-    printk(KERN_INFO "mrf: irq0 pin (%d) not found", IRQ0_PIN);
+    printk(KERN_INFO "mrf89xa: irq0 pin (%d) not found", IRQ0_PIN);
     goto finish;
   }
   gpiod_direction_input(irq_pins[0]);
 
   irq_pins[1] = gpio_to_desc(IRQ1_PIN);
   if (IS_ERR_OR_NULL(irq_pins[1])) {
-    printk(KERN_INFO "mrf: irq1 pin (%d) not found", IRQ1_PIN);
+    printk(KERN_INFO "mrf89xa: irq1 pin (%d) not found", IRQ1_PIN);
     goto finish;
   }
   gpiod_direction_input(irq_pins[1]);
@@ -447,25 +447,25 @@ static int mrf_dump_stats(struct seq_file *m, void *v){
              IRQ1_PIN, gpiod_get_value(irq_pins[1]) );
 
  finish:
-  up(&mrf_device->driver_semaphore);
+  up(&mrf89xa_device->driver_semaphore);
   return 0;
 }
 
-static int mrf_proc_open(struct inode *inode, struct file *file) {
-  return single_open(file, mrf_dump_stats, NULL);
+static int mrf89xa_proc_open(struct inode *inode, struct file *file) {
+  return single_open(file, mrf89xa_dump_stats, NULL);
 }
 
-static struct file_operations mrf_fops = {
-  .read           = mrf_read,
-  .write          = mrf_write,
-  .open           = mrf_open,
-  .release        = mrf_release,
-  .unlocked_ioctl = mrf_ioctl_unlocked,
+static struct file_operations mrf89xa_fops = {
+  .read           = mrf89xa_read,
+  .write          = mrf89xa_write,
+  .open           = mrf89xa_open,
+  .release        = mrf89xa_release,
+  .unlocked_ioctl = mrf89xa_ioctl_unlocked,
 };
 
-static struct file_operations mrf_proc_fops = {
+static struct file_operations mrf89xa_proc_fops = {
   .owner          = THIS_MODULE,
-  .open           = mrf_proc_open,
+  .open           = mrf89xa_proc_open,
   .read           = seq_read,
   .llseek	      = seq_lseek,
   .release	      = single_release,
@@ -488,9 +488,9 @@ static u8 read_register(u8 index) {
   };
   int status;
 
-  gpiod_set_value(mrf_device->config_pin, 0);
-  status = spi_sync_transfer(mrf_device->spi, t, ARRAY_SIZE(t));
-  gpiod_set_value(mrf_device->config_pin, 1);
+  gpiod_set_value(mrf89xa_device->config_pin, 0);
+  status = spi_sync_transfer(mrf89xa_device->spi, t, ARRAY_SIZE(t));
+  gpiod_set_value(mrf89xa_device->config_pin, 1);
   return value;
 }
 static int write_register(u8 index, u8 value) {
@@ -502,9 +502,9 @@ static int write_register(u8 index, u8 value) {
   };
   int status;
 
-  gpiod_set_value(mrf_device->config_pin, 0);
-  status = spi_sync_transfer(mrf_device->spi, &t, 1);
-  gpiod_set_value(mrf_device->config_pin, 1);
+  gpiod_set_value(mrf89xa_device->config_pin, 0);
+  status = spi_sync_transfer(mrf89xa_device->spi, &t, 1);
+  gpiod_set_value(mrf89xa_device->config_pin, 1);
 
   return status;
 }
@@ -518,9 +518,9 @@ static int read_fifo(u8* destination, u8 length) {
       .len		= 1,
       .speed_hz   = MRFSPI_DATA_SPEED,
     };
-    gpiod_set_value(mrf_device->data_pin, 0);
-    status = spi_sync_transfer(mrf_device->spi, &t, 1);
-    gpiod_set_value(mrf_device->data_pin, 1);
+    gpiod_set_value(mrf89xa_device->data_pin, 0);
+    status = spi_sync_transfer(mrf89xa_device->spi, &t, 1);
+    gpiod_set_value(mrf89xa_device->data_pin, 1);
   }
   return status;
 }
@@ -539,24 +539,24 @@ static int write_fifo(u8 address, u8 length, u8* data) {
   };
 
   /* trashfer length */
-  gpiod_set_value(mrf_device->data_pin, 0);
-  status = spi_sync_transfer(mrf_device->spi, &t, 1);
-  gpiod_set_value(mrf_device->data_pin, 1);
+  gpiod_set_value(mrf89xa_device->data_pin, 0);
+  status = spi_sync_transfer(mrf89xa_device->spi, &t, 1);
+  gpiod_set_value(mrf89xa_device->data_pin, 1);
   if (status) goto finish;
 
   /* trashfer address */
   t.tx_buf = &address;
-  gpiod_set_value(mrf_device->data_pin, 0);
-  status = spi_sync_transfer(mrf_device->spi, &t, 1);
-  gpiod_set_value(mrf_device->data_pin, 1);
+  gpiod_set_value(mrf89xa_device->data_pin, 0);
+  status = spi_sync_transfer(mrf89xa_device->spi, &t, 1);
+  gpiod_set_value(mrf89xa_device->data_pin, 1);
   if (status) goto finish;
 
   /* by-byte transfer data */
   for (i = 0; i < length; i++) {
     t.tx_buf = data + i;
-    gpiod_set_value(mrf_device->data_pin, 0);
-    status = spi_sync_transfer(mrf_device->spi, &t, 1);
-    gpiod_set_value(mrf_device->data_pin, 1);
+    gpiod_set_value(mrf89xa_device->data_pin, 0);
+    status = spi_sync_transfer(mrf89xa_device->spi, &t, 1);
+    gpiod_set_value(mrf89xa_device->data_pin, 1);
     if (status) goto finish;
   }
 
@@ -582,17 +582,17 @@ static int initialize_registers(void) {
 /* assumption: device is already acquired */
 static void tx_timeout(unsigned long unused) {
   int do_listen = 0;
-  printk(KERN_WARNING "mrf: tx_timeout\n");
+  printk(KERN_WARNING "mrf89xa: tx_timeout\n");
 
-  spin_lock(&mrf_device->state_lock);
-  mrf_device->state &= ~MRF_STATE_TRANSMITTING;
-  do_listen = mrf_device->state & MRF_STATE_LISTENING;
-  spin_unlock(&mrf_device->state_lock);
+  spin_lock(&mrf89xa_device->state_lock);
+  mrf89xa_device->state &= ~MRF_STATE_TRANSMITTING;
+  do_listen = mrf89xa_device->state & MRF_STATE_LISTENING;
+  spin_unlock(&mrf89xa_device->state_lock);
 
   _device_release();
 
-  if (!atomic_read(&mrf_device->tx_queue_size) && do_listen) {
-    queue_work(mrf_device->tx_worker, &rx_switcher);
+  if (!atomic_read(&mrf89xa_device->tx_queue_size) && do_listen) {
+    queue_work(mrf89xa_device->tx_worker, &rx_switcher);
   }
 }
 
@@ -606,33 +606,33 @@ static irqreturn_t irq0_handler(int a, void *b) {
 static irqreturn_t irq1_handler(int a, void *b) {
   MRF_PRINT_DEBUG("irq1_handler\n");
 
-  spin_lock(&mrf_device->state_lock);
-  if ( mrf_device->state & MRF_STATE_TRANSMITTING ) {
+  spin_lock(&mrf89xa_device->state_lock);
+  if ( mrf89xa_device->state & MRF_STATE_TRANSMITTING ) {
     int do_listen = 0;
-    mrf_device->state &= ~MRF_STATE_TRANSMITTING;
-    do_listen = mrf_device->state & MRF_STATE_LISTENING;
-    spin_unlock(&mrf_device->state_lock);
+    mrf89xa_device->state &= ~MRF_STATE_TRANSMITTING;
+    do_listen = mrf89xa_device->state & MRF_STATE_LISTENING;
+    spin_unlock(&mrf89xa_device->state_lock);
 
     _device_release();
 
-    if (!atomic_read(&mrf_device->tx_queue_size) && do_listen) {
-      queue_work(mrf_device->tx_worker, &rx_switcher);
+    if (!atomic_read(&mrf89xa_device->tx_queue_size) && do_listen) {
+      queue_work(mrf89xa_device->tx_worker, &rx_switcher);
     }
-    del_timer(&mrf_device->tx_timeout_timer);
-  } else if (mrf_device->state & MRF_STATE_LISTENING ) {
-    int acquired = atomic_read(&mrf_device->device_busy) == 0;
-    if (acquired) atomic_inc(&mrf_device->device_busy);
-    spin_unlock(&mrf_device->state_lock);
+    del_timer(&mrf89xa_device->tx_timeout_timer);
+  } else if (mrf89xa_device->state & MRF_STATE_LISTENING ) {
+    int acquired = atomic_read(&mrf89xa_device->device_busy) == 0;
+    if (acquired) atomic_inc(&mrf89xa_device->device_busy);
+    spin_unlock(&mrf89xa_device->state_lock);
     /* frame could be transmitting, then ignore frame */
     if (!acquired) {
-      printk(KERN_WARNING "mrf: ignore incoming frame, tx in progress\n");
+      printk(KERN_WARNING "mrf89xa: ignore incoming frame, tx in progress\n");
     } else {
-      queue_work(mrf_device->tx_worker, &frame_receiver);
+      queue_work(mrf89xa_device->tx_worker, &frame_receiver);
     }
   } else {
-    spin_unlock(&mrf_device->state_lock);
-    printk(KERN_WARNING "mrf: irq1_handler is called with unknown state : 0x%X, ignoring ?\n",
-           mrf_device->state);
+    spin_unlock(&mrf89xa_device->state_lock);
+    printk(KERN_WARNING "mrf89xa: irq1_handler is called with unknown state : 0x%X, ignoring ?\n",
+           mrf89xa_device->state);
   }
 
   return IRQ_HANDLED;
@@ -654,18 +654,18 @@ static int set_chip_mode(u8 mode) {
 
 static void _device_acquire(void) {
   int acquired = 0;
-  wait_event(mrf_device->device_wait_queue, atomic_read(&mrf_device->device_busy) == 0);
+  wait_event(mrf89xa_device->device_wait_queue, atomic_read(&mrf89xa_device->device_busy) == 0);
   while (!acquired) {
-    spin_lock(&mrf_device->state_lock);
-    acquired = atomic_read(&mrf_device->device_busy) == 0;
-    if (acquired) atomic_inc(&mrf_device->device_busy);
-    spin_unlock(&mrf_device->state_lock);
+    spin_lock(&mrf89xa_device->state_lock);
+    acquired = atomic_read(&mrf89xa_device->device_busy) == 0;
+    if (acquired) atomic_inc(&mrf89xa_device->device_busy);
+    spin_unlock(&mrf89xa_device->state_lock);
   }
 }
 
 static void _device_release(void) {
-  atomic_dec(&mrf_device->device_busy);
-  wake_up(&mrf_device->device_wait_queue);
+  atomic_dec(&mrf89xa_device->device_busy);
+  wake_up(&mrf89xa_device->device_wait_queue);
 }
 
 static void receive_frame_work(struct work_struct *unused) {
@@ -673,7 +673,7 @@ static void receive_frame_work(struct work_struct *unused) {
   u8 length_address[2];
   int status = 0;
   int queue_size;
-  struct mrf_payload *frame = 0;
+  struct mrf89xa_payload *frame = 0;
 
   MRF_PRINT_DEBUG("receive_frame_work\n");
 
@@ -695,7 +695,7 @@ static void receive_frame_work(struct work_struct *unused) {
     goto finish;
   }
 
-  frame = kzalloc(sizeof(struct mrf_payload), GFP_KERNEL);
+  frame = kzalloc(sizeof(struct mrf89xa_payload), GFP_KERNEL);
   if (!frame) {
     printk(KERN_WARNING "error allocating memory for frame: %d", status);
     goto finish;
@@ -709,17 +709,17 @@ static void receive_frame_work(struct work_struct *unused) {
     goto finish;
   }
 
-  spin_lock(&mrf_device->rx_queue_lock);
-  list_add_tail(&frame->list_item, &mrf_device->rx_queue);
+  spin_lock(&mrf89xa_device->rx_queue_lock);
+  list_add_tail(&frame->list_item, &mrf89xa_device->rx_queue);
 
-  queue_size = atomic_inc_return(&mrf_device->rx_queue_size);
+  queue_size = atomic_inc_return(&mrf89xa_device->rx_queue_size);
   if (queue_size > MRF_MAX_RX_QUEUE) {
-    struct mrf_payload *dropped_frame = list_first_entry(&mrf_device->rx_queue, struct mrf_payload, list_item);
+    struct mrf89xa_payload *dropped_frame = list_first_entry(&mrf89xa_device->rx_queue, struct mrf89xa_payload, list_item);
     list_del(&dropped_frame->list_item);
     kfree(dropped_frame);
-    queue_size = atomic_dec_return(&mrf_device->rx_queue_size);
+    queue_size = atomic_dec_return(&mrf89xa_device->rx_queue_size);
   }
-  spin_unlock(&mrf_device->rx_queue_lock);
+  spin_unlock(&mrf89xa_device->rx_queue_lock);
 
 
   if ((status = set_chip_mode(CHIPMODE_RX))) {
@@ -735,7 +735,7 @@ static void receive_frame_work(struct work_struct *unused) {
   if (frame && status) {
     kfree(frame);
   } else {
-    wake_up(&mrf_device->rx_wait_queue);
+    wake_up(&mrf89xa_device->rx_wait_queue);
   }
 }
 
@@ -744,9 +744,9 @@ static void rx_switch_work(struct work_struct *unused) {
   MRF_PRINT_DEBUG("rx_switch_work\n");
   _device_acquire();
 
-  spin_lock(&mrf_device->state_lock);
-  mrf_device->state &= ~MRF_STATE_TRANSMITTING;
-  spin_unlock(&mrf_device->state_lock);
+  spin_lock(&mrf89xa_device->state_lock);
+  mrf89xa_device->state &= ~MRF_STATE_TRANSMITTING;
+  spin_unlock(&mrf89xa_device->state_lock);
 
   MRF_PRINT_DEBUG(" -> stand_by\n");
   if ((status = set_chip_mode(CHIPMODE_STBYMODE))) {
@@ -762,25 +762,25 @@ static void rx_switch_work(struct work_struct *unused) {
 
 static void transfer_work(struct work_struct *unused) {
   int status;
-  struct mrf_payload *payload;
-  int queue_size = atomic_read(&mrf_device->tx_queue_size);
+  struct mrf89xa_payload *payload;
+  int queue_size = atomic_read(&mrf89xa_device->tx_queue_size);
 
   while (queue_size) {
     MRF_PRINT_DEBUG("transfer_work start\n");
-    spin_lock(&mrf_device->tx_queue_lock);
-    payload = list_first_entry(&mrf_device->tx_queue, struct mrf_payload, list_item);
+    spin_lock(&mrf89xa_device->tx_queue_lock);
+    payload = list_first_entry(&mrf89xa_device->tx_queue, struct mrf89xa_payload, list_item);
     list_del(&payload->list_item);
-    spin_unlock(&mrf_device->tx_queue_lock);
+    spin_unlock(&mrf89xa_device->tx_queue_lock);
 
     status = transfer_data(payload->addr, payload->size, payload->data);
     if (status) {
-      printk(KERN_WARNING "mrf: error transfer data: %d\n", status);
+      printk(KERN_WARNING "mrf89xa: error transfer data: %d\n", status);
     }
     kfree(payload);
 
-    queue_size = atomic_dec_return(&mrf_device->tx_queue_size);
+    queue_size = atomic_dec_return(&mrf89xa_device->tx_queue_size);
     MRF_PRINT_DEBUG("transfer_work end, queue_size = %d\n", queue_size);
-    wake_up(&mrf_device->tx_wait_queue);
+    wake_up(&mrf89xa_device->tx_wait_queue);
   }
 
 }
@@ -812,9 +812,9 @@ static int transfer_data(u8 address, u8 length, u8* data) {
     goto finish;
   }
 
-  spin_lock(&mrf_device->state_lock);
-  mrf_device->state |= MRF_STATE_TRANSMITTING;
-  spin_unlock(&mrf_device->state_lock);
+  spin_lock(&mrf89xa_device->state_lock);
+  mrf89xa_device->state |= MRF_STATE_TRANSMITTING;
+  spin_unlock(&mrf89xa_device->state_lock);
 
   if ((status = write_fifo(address, length, data))) {
     goto finish;
@@ -823,13 +823,13 @@ static int transfer_data(u8 address, u8 length, u8* data) {
     goto finish;
   }
   /* tx timeout timer */
-  init_timer(&mrf_device->tx_timeout_timer);
+  init_timer(&mrf89xa_device->tx_timeout_timer);
 
-  mrf_device->tx_timeout_timer.function = tx_timeout;
-  mrf_device->tx_timeout_timer.expires = jiffies + MRF_IRQ_TX_TIMEOUT * HZ / 1000;
+  mrf89xa_device->tx_timeout_timer.function = tx_timeout;
+  mrf89xa_device->tx_timeout_timer.expires = jiffies + MRF_IRQ_TX_TIMEOUT * HZ / 1000;
 
   /* start tx timeout timer */
-  add_timer(&mrf_device->tx_timeout_timer);
+  add_timer(&mrf89xa_device->tx_timeout_timer);
 
   MRF_PRINT_DEBUG("transfer_data: success\n");
 
@@ -843,28 +843,28 @@ static int cmd_reset(int reinitialize) {
 
   _device_acquire();
 
-  spin_lock(&mrf_device->state_lock);
-  state = mrf_device->state;
-  spin_unlock(&mrf_device->state_lock);
+  spin_lock(&mrf89xa_device->state_lock);
+  state = mrf89xa_device->state;
+  spin_unlock(&mrf89xa_device->state_lock);
 
   state &= ~MRF_STATE_ADDRESSASSIGNED;
   state &= ~MRF_STATE_FREQASSIGNED;
   state &= ~MRF_STATE_TRANSMITTING;
   state &= ~MRF_STATE_LISTENING;
-  spin_lock(&mrf_device->state_lock);
-  mrf_device->state = state;
-  spin_unlock(&mrf_device->state_lock);
+  spin_lock(&mrf89xa_device->state_lock);
+  mrf89xa_device->state = state;
+  spin_unlock(&mrf89xa_device->state_lock);
 
   /* disable mrf interrupts during reset */
-  disable_irq(mrf_device->irq0);
-  disable_irq(mrf_device->irq1);
+  disable_irq(mrf89xa_device->irq0);
+  disable_irq(mrf89xa_device->irq1);
 
-  gpiod_set_value(mrf_device->reset_pin, 1);
+  gpiod_set_value(mrf89xa_device->reset_pin, 1);
 
   /* signal reset */
   msleep(RESET_DELAY);
 
-  gpiod_set_value(mrf_device->reset_pin, 0);
+  gpiod_set_value(mrf89xa_device->reset_pin, 0);
   /* wait until device will be up */
   msleep(RESET_DELAY);
 
@@ -876,14 +876,14 @@ static int cmd_reset(int reinitialize) {
 
  finish:
   /* restore interrupt handlers */
-  enable_irq(mrf_device->irq0);
-  enable_irq(mrf_device->irq1);
+  enable_irq(mrf89xa_device->irq0);
+  enable_irq(mrf89xa_device->irq1);
 
   _device_release();
   return status;
 }
 
-static int cmd_setaddress(mrf_address *addr) {
+static int cmd_setaddress(mrf89xa_address *addr) {
   int status = 0;
   u8 node_id = addr->node_id;
   u32 network_id = cpu_to_be32(addr->network_id);
@@ -902,9 +902,9 @@ static int cmd_setaddress(mrf_address *addr) {
   status = write_register(REG_SYNC_WORD_3, network_parts[2]); if(status) goto finish;
   status = write_register(REG_SYNC_WORD_4, network_parts[3]); if(status) goto finish;
 
-  spin_lock(&mrf_device->state_lock);
-  mrf_device->state |= MRF_STATE_ADDRESSASSIGNED;
-  spin_unlock(&mrf_device->state_lock);
+  spin_lock(&mrf89xa_device->state_lock);
+  mrf89xa_device->state |= MRF_STATE_ADDRESSASSIGNED;
+  spin_unlock(&mrf89xa_device->state_lock);
 
  finish:
   _device_release();
@@ -915,7 +915,7 @@ static int cmd_setpower(uint8_t value) {
   int status = 0;
 
   _device_acquire();
-  MRF_PRINT_DEBUG("mrf: set power to: 0x%.2x\n", value);
+  MRF_PRINT_DEBUG("mrf89xa: set power to: 0x%.2x\n", value);
   status = write_register(REG_TXCON, (FC_400 | value));
   _device_release();
 
@@ -929,12 +929,12 @@ static int cmd_debug(unsigned long arg) {
 }
 
 static int cmd_listen(void) {
-  spin_lock(&mrf_device->state_lock);
-  mrf_device->state |= MRF_STATE_LISTENING;
-  spin_unlock(&mrf_device->state_lock);
-  queue_work(mrf_device->tx_worker, &rx_switcher);
+  spin_lock(&mrf89xa_device->state_lock);
+  mrf89xa_device->state |= MRF_STATE_LISTENING;
+  spin_unlock(&mrf89xa_device->state_lock);
+  queue_work(mrf89xa_device->tx_worker, &rx_switcher);
 
-  MRF_PRINT_DEBUG("mrf: set listening mode\n");
+  MRF_PRINT_DEBUG("mrf89xa: set listening mode\n");
 
   return 0;
 }
@@ -948,15 +948,15 @@ static int cmd_setfreq(unsigned long arg) {
   status = write_register(REG_P1C, *rps++); if(status) goto finish;
   status = write_register(REG_S1C, *rps++); if(status) goto finish;
 
-  spin_lock(&mrf_device->state_lock);
-  mrf_device->state |= MRF_STATE_FREQASSIGNED;
-  spin_unlock(&mrf_device->state_lock);
+  spin_lock(&mrf89xa_device->state_lock);
+  mrf89xa_device->state |= MRF_STATE_FREQASSIGNED;
+  spin_unlock(&mrf89xa_device->state_lock);
 
  finish:
   return status;
 }
 
-long mrf_ioctl_unlocked(struct file *filp, unsigned int cmd, unsigned long arg) {
+long mrf89xa_ioctl_unlocked(struct file *filp, unsigned int cmd, unsigned long arg) {
   int status = 0;
 #define write_register_protected(ADDR, VALUE) status = write_register((ADDR), (VALUE)); if (status) goto finish;
 
@@ -972,14 +972,14 @@ long mrf_ioctl_unlocked(struct file *filp, unsigned int cmd, unsigned long arg) 
   if (status) return -EFAULT;
 
   MRF_PRINT_DEBUG("ioctl switch\n");
-  down(&mrf_device->driver_semaphore);
+  down(&mrf89xa_device->driver_semaphore);
 
   switch(cmd) {
   case MRF_IOC_RESET:
     cmd_reset(arg);
     break;
   case MRF_IOC_SETADDR:
-    status = cmd_setaddress((mrf_address*) arg);
+    status = cmd_setaddress((mrf89xa_address*) arg);
     break;
   case MRF_IOC_SETFREQ:
     status = cmd_setfreq(arg);
@@ -997,57 +997,57 @@ long mrf_ioctl_unlocked(struct file *filp, unsigned int cmd, unsigned long arg) 
     return -ENOTTY;
   };
 
-  up(&mrf_device->driver_semaphore);
+  up(&mrf89xa_device->driver_semaphore);
   MRF_PRINT_DEBUG("ioctl result: %d\n", status);
   return status;
 }
 
 static int mrf89xa_probe(struct spi_device *spi) {
   u8 i;
-  u8 mrf_found = 1;
+  u8 mrf89xa_found = 1;
   int status;
   int cdev_added = 0;
-  struct mrf_dev* mrf_dev = NULL;
+  struct mrf89xa_dev* mrf89xa_dev = NULL;
   dev_t device_id = 0;
 
   printk(KERN_INFO "mrf89xa: loading module (ignore_registers = %d)\n", ignore_registers);
 
   /* allocate memory for mrf device */
-  mrf_dev = kzalloc(sizeof(struct mrf_dev), GFP_KERNEL);
-  if ( !mrf_dev ) {
+  mrf89xa_dev = kzalloc(sizeof(struct mrf89xa_dev), GFP_KERNEL);
+  if ( !mrf89xa_dev ) {
     status = -ENOMEM;
     goto err;
   }
-  printk(KERN_INFO "mrf89xa: allocated device structure %p\n",mrf_dev);
+  printk(KERN_INFO "mrf89xa: allocated device structure %p\n",mrf89xa_dev);
 
   /* allocate control and data GPIO pins */
-  //mrf_dev->config_pin = gpiod_get(NULL, CSCON_NAME, GPIOD_OUT_LOW);
-  mrf_dev->config_pin = gpio_to_desc(CSCON_PIN);
-  if (IS_ERR_OR_NULL(mrf_dev->config_pin)) {
+  //mrf89xa_dev->config_pin = gpiod_get(NULL, CSCON_NAME, GPIOD_OUT_LOW);
+  mrf89xa_dev->config_pin = gpio_to_desc(CSCON_PIN);
+  if (IS_ERR_OR_NULL(mrf89xa_dev->config_pin)) {
     printk(KERN_INFO "mrf89xa: cannot get config_pin(%d)\n", CSCON_PIN);
     status = -ENODEV;
     goto err;
   }
-  gpiod_direction_output(mrf_dev->config_pin, 0);
-  gpiod_set_value(mrf_dev->config_pin, 1);
+  gpiod_direction_output(mrf89xa_dev->config_pin, 0);
+  gpiod_set_value(mrf89xa_dev->config_pin, 1);
 
-  mrf_dev->data_pin = gpio_to_desc(DATA_PIN);
-  if (IS_ERR_OR_NULL(mrf_dev->data_pin)) {
+  mrf89xa_dev->data_pin = gpio_to_desc(DATA_PIN);
+  if (IS_ERR_OR_NULL(mrf89xa_dev->data_pin)) {
     printk(KERN_INFO "mrf89xa: cannot get data_pin(%d)\n", DATA_PIN);
     status = -ENODEV;
     goto err;
   }
-  gpiod_direction_output(mrf_dev->data_pin, 0);
-  gpiod_set_value(mrf_dev->data_pin, 1);
+  gpiod_direction_output(mrf89xa_dev->data_pin, 0);
+  gpiod_set_value(mrf89xa_dev->data_pin, 1);
 
-  mrf_dev->reset_pin = gpio_to_desc(RESET_PIN);
-  if (IS_ERR_OR_NULL(mrf_dev->reset_pin)) {
+  mrf89xa_dev->reset_pin = gpio_to_desc(RESET_PIN);
+  if (IS_ERR_OR_NULL(mrf89xa_dev->reset_pin)) {
     printk(KERN_INFO "mrf89xa: reset pin (%d) not found", RESET_PIN);
     status = -EFAULT;
     goto err;
   }
-  gpiod_direction_output(mrf_dev->reset_pin, 0);
-  gpiod_set_value(mrf_dev->reset_pin, 0);
+  gpiod_direction_output(mrf89xa_dev->reset_pin, 0);
+  gpiod_set_value(mrf89xa_dev->reset_pin, 0);
 
   /* characted device allocation */
   status = alloc_chrdev_region(&device_id, 1, 1, DRV_NAME);
@@ -1058,37 +1058,37 @@ static int mrf89xa_probe(struct spi_device *spi) {
   printk(KERN_INFO "mrf89xa: allocated major device numer: %d\n", MAJOR(device_id));
 
   /* initialize mrf device */
-  INIT_LIST_HEAD(&mrf_dev->tx_queue);
-  atomic_set(&mrf_dev->tx_queue_size, 0);
-  atomic_set(&mrf_dev->device_busy, 0);
-  spin_lock_init(&mrf_dev->tx_queue_lock);
+  INIT_LIST_HEAD(&mrf89xa_dev->tx_queue);
+  atomic_set(&mrf89xa_dev->tx_queue_size, 0);
+  atomic_set(&mrf89xa_dev->device_busy, 0);
+  spin_lock_init(&mrf89xa_dev->tx_queue_lock);
 
-  INIT_LIST_HEAD(&mrf_dev->rx_queue);
-  atomic_set(&mrf_dev->rx_queue_size, 0);
-  spin_lock_init(&mrf_dev->rx_queue_lock);
+  INIT_LIST_HEAD(&mrf89xa_dev->rx_queue);
+  atomic_set(&mrf89xa_dev->rx_queue_size, 0);
+  spin_lock_init(&mrf89xa_dev->rx_queue_lock);
 
-  init_waitqueue_head(&mrf_dev->tx_wait_queue);
-  init_waitqueue_head(&mrf_dev->rx_wait_queue);
-  init_waitqueue_head(&mrf_dev->device_wait_queue);
+  init_waitqueue_head(&mrf89xa_dev->tx_wait_queue);
+  init_waitqueue_head(&mrf89xa_dev->rx_wait_queue);
+  init_waitqueue_head(&mrf89xa_dev->device_wait_queue);
 
-  sema_init(&mrf_dev->driver_semaphore, 1);
-  cdev_init(&mrf_dev->cdev, &mrf_fops);
-  mrf_dev->cdev.owner = THIS_MODULE;
-  mrf_dev->cdev.ops = &mrf_fops;
-  mrf_dev->spi = spi;
+  sema_init(&mrf89xa_dev->driver_semaphore, 1);
+  cdev_init(&mrf89xa_dev->cdev, &mrf89xa_fops);
+  mrf89xa_dev->cdev.owner = THIS_MODULE;
+  mrf89xa_dev->cdev.ops = &mrf89xa_fops;
+  mrf89xa_dev->spi = spi;
   /* no need to lock */
-  mrf_dev->state = 0;
-  mrf_dev->tx_worker = create_singlethread_workqueue(TX_WORKQUEUE_NAME);
-  if (! mrf_dev->tx_worker ) {
+  mrf89xa_dev->state = 0;
+  mrf89xa_dev->tx_worker = create_singlethread_workqueue(TX_WORKQUEUE_NAME);
+  if (! mrf89xa_dev->tx_worker ) {
     status = -ENOMEM;
     goto err;
   }
 
-  mrf_device = mrf_dev;
+  mrf89xa_device = mrf89xa_dev;
 
   /* add character device */
   printk(KERN_INFO "mrf89xa: adding character device\n");
-  status = cdev_add(&mrf_dev->cdev, device_id, 1);
+  status = cdev_add(&mrf89xa_dev->cdev, device_id, 1);
   if (status) {
     printk(KERN_INFO "mrf89xa: cannot add character deviced\n");
     goto err;
@@ -1096,8 +1096,8 @@ static int mrf89xa_probe(struct spi_device *spi) {
   cdev_added = 1;
 
   /* create proc fs entry */
-  mrf_device->proc_file = proc_create(DRV_NAME, 0, NULL, &mrf_proc_fops);
-  if (! mrf_device->proc_file ) {
+  mrf89xa_device->proc_file = proc_create(DRV_NAME, 0, NULL, &mrf89xa_proc_fops);
+  if (! mrf89xa_device->proc_file ) {
     printk(KERN_INFO "mrf89xa: could not initialize /proc/%s\n", DRV_NAME);
     status = -ENOMEM;
     goto err;
@@ -1109,24 +1109,24 @@ static int mrf89xa_probe(struct spi_device *spi) {
     u8 got;
     u8 expected = por_register_values[i];
 
-    gpiod_set_value(mrf_device->config_pin, 0);
+    gpiod_set_value(mrf89xa_device->config_pin, 0);
     got = spi_w8r8(spi, CMD_READ_REGISTER(i));
-    gpiod_set_value(mrf_device->config_pin, 1);
+    gpiod_set_value(mrf89xa_device->config_pin, 1);
 
     printk(KERN_INFO "mrf89xa: probing %d register. Got: %.2x, expected: %.2x\n", i, got, expected);
-    mrf_found &= (got == expected);
+    mrf89xa_found &= (got == expected);
   }
-  if (mrf_found | ignore_registers) {
+  if (mrf89xa_found | ignore_registers) {
     /* success */
     printk(KERN_INFO "mrf89xa: device found\n");
     status = 0;
 
     /* no need to lock, invoked only once from init */
-    mrf_device->state |= MRF_STATE_DEVICEFOUND;
+    mrf89xa_device->state |= MRF_STATE_DEVICEFOUND;
   }
 
   /* check that probe succeed; no need to lock */
-  if ( !(mrf_device->state & MRF_STATE_DEVICEFOUND)) {
+  if ( !(mrf89xa_device->state & MRF_STATE_DEVICEFOUND)) {
     printk(KERN_INFO "mrf89xa: device hasn't been probed successfully\n");
     status = -ENODEV;
     goto err;
@@ -1139,19 +1139,40 @@ static int mrf89xa_probe(struct spi_device *spi) {
   
   err:
     printk(KERN_INFO "mrf89xa: failed\n");
-    if (mrf_dev && mrf_dev->tx_worker) destroy_workqueue(mrf_dev->tx_worker);
-    if (cdev_added) cdev_del(&mrf_device->cdev);
+    if (mrf89xa_dev && mrf89xa_dev->tx_worker) destroy_workqueue(mrf89xa_dev->tx_worker);
+    if (cdev_added) cdev_del(&mrf89xa_device->cdev);
     if (device_id) unregister_chrdev_region(device_id, 1);
-    if (mrf_dev && mrf_dev->config_pin && !IS_ERR_OR_NULL(mrf_dev->config_pin)) gpiod_put(mrf_dev->config_pin);
-    if (mrf_dev && mrf_dev->data_pin && !IS_ERR_OR_NULL(mrf_dev->data_pin)) gpiod_put(mrf_dev->data_pin);
-    if (mrf_dev && mrf_dev->reset_pin && !IS_ERR_OR_NULL(mrf_dev->reset_pin)) gpiod_put(mrf_dev->reset_pin);
-    if (mrf_dev) kfree(mrf_dev);
-    mrf_device = NULL;
+    if (mrf89xa_dev && mrf89xa_dev->config_pin && !IS_ERR_OR_NULL(mrf89xa_dev->config_pin)) gpiod_put(mrf89xa_dev->config_pin);
+    if (mrf89xa_dev && mrf89xa_dev->data_pin && !IS_ERR_OR_NULL(mrf89xa_dev->data_pin)) gpiod_put(mrf89xa_dev->data_pin);
+    if (mrf89xa_dev && mrf89xa_dev->reset_pin && !IS_ERR_OR_NULL(mrf89xa_dev->reset_pin)) gpiod_put(mrf89xa_dev->reset_pin);
+    if (mrf89xa_dev) kfree(mrf89xa_dev);
+    mrf89xa_device = NULL;
     return status;
 }
 
 static int mrf89xa_remove(struct spi_device *spi) {
-  printk(KERN_INFO "mrf89xa: remove callback\n");
+  dev_t device_id;
+
+  printk(KERN_INFO "mrf89xa: removing module\n");
+
+  destroy_workqueue(mrf89xa_device->tx_worker);
+
+  device_id = mrf89xa_device->cdev.dev;
+  cdev_del(&mrf89xa_device->cdev);
+
+  printk(KERN_INFO "mrf89xa: character device removed\n");
+
+  unregister_chrdev_region(device_id, 1);
+  printk(KERN_INFO "mrf89xa: character device deallocated\n");
+
+  gpiod_put(mrf89xa_device->config_pin);
+  gpiod_put(mrf89xa_device->data_pin);
+  gpiod_put(mrf89xa_device->reset_pin);
+
+  printk(KERN_INFO "mrf89xa: mrf device memory deallocated\n");
+
+  kfree(mrf89xa_device);
+
   return 0;
 }
 
@@ -1179,35 +1200,9 @@ static __init int mrf89xa_init(void) {
   return spi_register_driver(&mrf89xa_driver);
 }
 
-static void __exit mrf89xa_exit(void) {
-  dev_t device_id;
-
-  printk(KERN_INFO "mrf89xa: removing module\n");
-  
+static void __exit mrf89xa_exit(void) {  
   spi_unregister_driver(&mrf89xa_driver);
-
   remove_proc_entry(DRV_NAME, NULL);
-
-  if (mrf_device) {
-    if (mrf_device->tx_worker)
-      destroy_workqueue(mrf_device->tx_worker);
-
-    device_id = mrf_device->cdev.dev;
-    cdev_del(&mrf_device->cdev);
-
-    printk(KERN_INFO "mrf89xa: character device removed\n");
-
-    unregister_chrdev_region(device_id, 1);
-    printk(KERN_INFO "mrf89xa: character device deallocated\n");
-
-    gpiod_put(mrf_device->config_pin);
-    gpiod_put(mrf_device->data_pin);
-    gpiod_put(mrf_device->reset_pin);
-
-    printk(KERN_INFO "mrf89xa: mrf device memory deallocated\n");
-
-    kfree(mrf_device);
-  }
 }
 
 
