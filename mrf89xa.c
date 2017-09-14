@@ -10,7 +10,6 @@
 #include <linux/fs.h>
 #include <linux/errno.h>
 #include <linux/types.h>
-#include <linux/proc_fs.h>
 #include <linux/fcntl.h>
 #include <asm/uaccess.h>
 #include <asm/byteorder.h>
@@ -1034,7 +1033,7 @@ static int mrf89xa_probe(struct spi_device *spi) {
 
   mrf_dev->data_pin = gpio_to_desc(DATA_PIN);
   if (IS_ERR_OR_NULL(mrf_dev->data_pin)) {
-    printk(KERN_INFO "mrf: cannot get data_pin(%d)\n", DATA_PIN);
+    printk(KERN_INFO "mrf89xa: cannot get data_pin(%d)\n", DATA_PIN);
     status = -ENODEV;
     goto err;
   }
@@ -1043,7 +1042,7 @@ static int mrf89xa_probe(struct spi_device *spi) {
 
   mrf_dev->reset_pin = gpio_to_desc(RESET_PIN);
   if (IS_ERR_OR_NULL(mrf_dev->reset_pin)) {
-    printk(KERN_INFO "mrf: reset pin (%d) not found", RESET_PIN);
+    printk(KERN_INFO "mrf89xa: reset pin (%d) not found", RESET_PIN);
     status = -EFAULT;
     goto err;
   }
@@ -1051,12 +1050,12 @@ static int mrf89xa_probe(struct spi_device *spi) {
   gpiod_set_value(mrf_dev->reset_pin, 0);
 
   /* characted device allocation */
-  status = alloc_chrdev_region(&device_id, 1, 1, "mrf");
+  status = alloc_chrdev_region(&device_id, 1, 1, DRV_NAME);
   if ( status < 0 ) {
-    printk(KERN_INFO "mrf: cannot allocate character device\n");
+    printk(KERN_INFO "mrf89xa: cannot allocate character device\n");
     goto err;
   }
-  printk(KERN_INFO "mrf: allocated major device numer: %d\n", MAJOR(device_id));
+  printk(KERN_INFO "mrf89xa: allocated major device numer: %d\n", MAJOR(device_id));
 
   /* initialize mrf device */
   INIT_LIST_HEAD(&mrf_dev->tx_queue);
@@ -1088,33 +1087,23 @@ static int mrf89xa_probe(struct spi_device *spi) {
   mrf_device = mrf_dev;
 
   /* add character device */
-  printk(KERN_INFO "mrf: adding character device\n");
+  printk(KERN_INFO "mrf89xa: adding character device\n");
   status = cdev_add(&mrf_dev->cdev, device_id, 1);
   if (status) {
-    printk(KERN_INFO "mrf: cannot add character deviced\n");
+    printk(KERN_INFO "mrf89xa: cannot add character deviced\n");
     goto err;
   }
   cdev_added = 1;
 
-  /* check that probe succeed; no need to lock */
-  if ( !(mrf_device->state & MRF_STATE_DEVICEFOUND)) {
-    printk(KERN_INFO "mrf: device hasn't been probed successfully\n");
-    status = -ENODEV;
-    goto err;
-  }
-
   /* create proc fs entry */
   mrf_device->proc_file = proc_create(DRV_NAME, 0, NULL, &mrf_proc_fops);
   if (! mrf_device->proc_file ) {
-    printk(KERN_INFO "mrf: could not initialize /proc/%s\n", DRV_NAME);
+    printk(KERN_INFO "mrf89xa: could not initialize /proc/%s\n", DRV_NAME);
     status = -ENOMEM;
     goto err;
   }
 
-  /* all OK */
-  printk(KERN_INFO "mrf: initialization succeed\n");
-
-  printk(KERN_INFO "mrf: probing spi device %p for mrf presence\n", spi);
+  printk(KERN_INFO "mrf89xa: probing spi device %p for mrf presence\n", spi);
 
   for (i = 0; i < ARRAY_SIZE(por_register_values); i++) {
     u8 got;
@@ -1124,69 +1113,50 @@ static int mrf89xa_probe(struct spi_device *spi) {
     got = spi_w8r8(spi, CMD_READ_REGISTER(i));
     gpiod_set_value(mrf_device->config_pin, 1);
 
-    printk(KERN_INFO "mrf: probing %d register. Got: %.2x, expected: %.2x\n", i, got, expected);
+    printk(KERN_INFO "mrf89xa: probing %d register. Got: %.2x, expected: %.2x\n", i, got, expected);
     mrf_found &= (got == expected);
   }
   if (mrf_found | ignore_registers) {
     /* success */
-    printk(KERN_INFO "mrf: device found\n");
+    printk(KERN_INFO "mrf89xa: device found\n");
     status = 0;
 
     /* no need to lock, invoked only once from init */
     mrf_device->state |= MRF_STATE_DEVICEFOUND;
   }
-  else {
+
+  /* check that probe succeed; no need to lock */
+  if ( !(mrf_device->state & MRF_STATE_DEVICEFOUND)) {
+    printk(KERN_INFO "mrf89xa: device hasn't been probed successfully\n");
     status = -ENODEV;
+    goto err;
   }
+
+  /* all OK */
+  printk(KERN_INFO "mrf89xa: initialization succeed\n");
 
   return status;
   
   err:
-    printk(KERN_INFO "mrf: failed\n");
+    printk(KERN_INFO "mrf89xa: failed\n");
     if (mrf_dev && mrf_dev->tx_worker) destroy_workqueue(mrf_dev->tx_worker);
     if (cdev_added) cdev_del(&mrf_device->cdev);
     if (device_id) unregister_chrdev_region(device_id, 1);
     if (mrf_dev && mrf_dev->config_pin && !IS_ERR_OR_NULL(mrf_dev->config_pin)) gpiod_put(mrf_dev->config_pin);
     if (mrf_dev && mrf_dev->data_pin && !IS_ERR_OR_NULL(mrf_dev->data_pin)) gpiod_put(mrf_dev->data_pin);
     if (mrf_dev && mrf_dev->reset_pin && !IS_ERR_OR_NULL(mrf_dev->reset_pin)) gpiod_put(mrf_dev->reset_pin);
-    if (spi) spi_unregister_device(spi);
     if (mrf_dev) kfree(mrf_dev);
     mrf_device = NULL;
     return status;
 }
 
-static int mrf89xa_remove(struct spi_device *spi)
-{
-  dev_t device_id;
-  printk(KERN_INFO "mrf: removing module\n");
-  /* TODO: check errors */
-
-  remove_proc_entry(DRV_NAME, NULL);
-  destroy_workqueue(mrf_device->tx_worker);
-
-  device_id = mrf_device->cdev.dev;
-
-  cdev_del(&mrf_device->cdev);
-  printk(KERN_INFO "mrf: character device removed\n");
-
-  unregister_chrdev_region(device_id, 1);
-  printk(KERN_INFO "mrf: character device deallocated\n");
-
-  gpiod_put(mrf_device->config_pin);
-  gpiod_put(mrf_device->data_pin);
-  gpiod_put(mrf_device->reset_pin);
-
-  printk(KERN_INFO "mrf: mrf device memory deallocated\n");
-
-    spi_unregister_device(mrf_device->spi);
-  printk(KERN_INFO "mrf: spi device unregistered\n");
-
-  kfree(mrf_device);
-  mrf_device = NULL;
+static int mrf89xa_remove(struct spi_device *spi) {
+  printk(KERN_INFO "mrf89xa: remove callback\n");
   return 0;
 }
 
 void mrf89xa_shutdown(struct spi_device *spi) {
+  printk(KERN_INFO "mrf89xa: shutdown callback\n");
 }
 
 static const struct spi_device_id mrf89xa_id[] = {
@@ -1202,7 +1172,7 @@ static struct spi_driver mrf89xa_driver = {
   .id_table = mrf89xa_id,
 	.probe = mrf89xa_probe,
 	.remove = mrf89xa_remove,
-  .shutdown   = mrf89xa_shutdown,
+  .shutdown = mrf89xa_shutdown,
 };
 
 static __init int mrf89xa_init(void) {
@@ -1210,7 +1180,34 @@ static __init int mrf89xa_init(void) {
 }
 
 static void __exit mrf89xa_exit(void) {
+  dev_t device_id;
+
+  printk(KERN_INFO "mrf89xa: removing module\n");
+  
   spi_unregister_driver(&mrf89xa_driver);
+
+  remove_proc_entry(DRV_NAME, NULL);
+
+  if (mrf_device) {
+    if (mrf_device->tx_worker)
+      destroy_workqueue(mrf_device->tx_worker);
+
+    device_id = mrf_device->cdev.dev;
+    cdev_del(&mrf_device->cdev);
+
+    printk(KERN_INFO "mrf89xa: character device removed\n");
+
+    unregister_chrdev_region(device_id, 1);
+    printk(KERN_INFO "mrf89xa: character device deallocated\n");
+
+    gpiod_put(mrf_device->config_pin);
+    gpiod_put(mrf_device->data_pin);
+    gpiod_put(mrf_device->reset_pin);
+
+    printk(KERN_INFO "mrf89xa: mrf device memory deallocated\n");
+
+    kfree(mrf_device);
+  }
 }
 
 
