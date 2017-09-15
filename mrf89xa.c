@@ -1087,6 +1087,7 @@ static __init int mrf89xa_init(void) {
   int driver_registered = 0, cdev_added = 0;
   struct mrf89xa_dev* mrf89xa_dev = NULL;
   dev_t device_id = 0;
+  struct class *device_class;
 
   printk(KERN_INFO "mrf89xa: loading module (ignore_registers = %d)\n", ignore_registers);
 
@@ -1153,6 +1154,7 @@ static __init int mrf89xa_init(void) {
   cdev_init(&mrf89xa_dev->cdev, &mrf89xa_fops);
   mrf89xa_dev->cdev.owner = THIS_MODULE;
   mrf89xa_dev->cdev.ops = &mrf89xa_fops;
+
   /* no need to lock */
   mrf89xa_dev->state = 0;
   mrf89xa_dev->tx_worker = create_singlethread_workqueue(TX_WORKQUEUE_NAME);
@@ -1171,6 +1173,14 @@ static __init int mrf89xa_init(void) {
     goto err;
   }
   cdev_added = 1;
+
+  device_class = class_create(THIS_MODULE, DRV_NAME);
+  device_create(device_class, NULL, device_id, NULL, "%s", DRV_NAME);
+
+  if ( device_class == NULL ) {
+    printk(KERN_INFO "mrf89xa: device class creating error !\n");
+    goto err;
+  }
 
   /* register and probe mrf device connection via spi */
   status = spi_register_driver(&mrf89xa_driver);
