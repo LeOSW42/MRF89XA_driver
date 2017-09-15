@@ -1006,7 +1006,85 @@ static int mrf89xa_probe(struct spi_device *spi) {
   u8 i;
   u8 mrf89xa_found = 1;
   int status;
-  int cdev_added = 0;
+
+  printk(KERN_INFO "mrf89xa: probing spi device %p for mrf presence\n", spi);
+
+  for (i = 0; i < ARRAY_SIZE(por_register_values); i++) {
+    u8 got;
+    u8 expected = por_register_values[i];
+
+    gpiod_set_value(mrf89xa_device->config_pin, 0);
+    got = spi_w8r8(spi, CMD_READ_REGISTER(i));
+    gpiod_set_value(mrf89xa_device->config_pin, 1);
+
+    printk(KERN_INFO "mrf89xa: probing %d register. Got: %.2x, expected: %.2x\n", i, got, expected);
+    mrf89xa_found &= (got == expected);
+  }
+  if (mrf89xa_found | ignore_registers) {
+    /* success */
+    printk(KERN_INFO "mrf89xa: device found\n");
+    status = 0;
+
+    /* no need to lock, invoked only once from init */
+    mrf89xa_device->state |= MRF_STATE_DEVICEFOUND;
+
+    mrf89xa_device->spi = spi;
+  }
+  else {
+    status = -ENODEV;
+  }
+  return status;
+}
+
+static int mrf89xa_remove(struct spi_device *spi) {
+  dev_t device_id;
+
+  printk(KERN_INFO "mrf89xa: removing module\n");
+
+  destroy_workqueue(mrf89xa_device->tx_worker);
+
+  device_id = mrf89xa_device->cdev.dev;
+  cdev_del(&mrf89xa_device->cdev);
+
+  printk(KERN_INFO "mrf89xa: character device removed\n");
+
+  unregister_chrdev_region(device_id, 1);
+  printk(KERN_INFO "mrf89xa: character device deallocated\n");
+
+  gpiod_put(mrf89xa_device->config_pin);
+  gpiod_put(mrf89xa_device->data_pin);
+  gpiod_put(mrf89xa_device->reset_pin);
+
+  printk(KERN_INFO "mrf89xa: mrf device memory deallocated\n");
+
+  kfree(mrf89xa_device);
+
+  return 0;
+}
+
+void mrf89xa_shutdown(struct spi_device *spi) {
+  printk(KERN_INFO "mrf89xa: shutdown callback\n");
+}
+
+static const struct spi_device_id mrf89xa_id[] = {
+  { DRV_NAME, 0 },
+  { }
+};
+
+static struct spi_driver mrf89xa_driver = {
+	.driver = {
+		.name =		DRV_NAME,
+		.owner =	THIS_MODULE,
+	},
+  .id_table = mrf89xa_id,
+	.probe = mrf89xa_probe,
+	.remove = mrf89xa_remove,
+  .shutdown = mrf89xa_shutdown,
+};
+
+static __init int mrf89xa_init(void) {
+  int status;
+  int driver_registered = 0, cdev_added = 0;
   struct mrf89xa_dev* mrf89xa_dev = NULL;
   dev_t device_id = 0;
 
@@ -1075,7 +1153,6 @@ static int mrf89xa_probe(struct spi_device *spi) {
   cdev_init(&mrf89xa_dev->cdev, &mrf89xa_fops);
   mrf89xa_dev->cdev.owner = THIS_MODULE;
   mrf89xa_dev->cdev.ops = &mrf89xa_fops;
-  mrf89xa_dev->spi = spi;
   /* no need to lock */
   mrf89xa_dev->state = 0;
   mrf89xa_dev->tx_worker = create_singlethread_workqueue(TX_WORKQUEUE_NAME);
@@ -1095,35 +1172,13 @@ static int mrf89xa_probe(struct spi_device *spi) {
   }
   cdev_added = 1;
 
-  /* create proc fs entry */
-  mrf89xa_device->proc_file = proc_create(DRV_NAME, 0, NULL, &mrf89xa_proc_fops);
-  if (! mrf89xa_device->proc_file ) {
-    printk(KERN_INFO "mrf89xa: could not initialize /proc/%s\n", DRV_NAME);
-    status = -ENOMEM;
+  /* register and probe mrf device connection via spi */
+  status = spi_register_driver(&mrf89xa_driver);
+  if (status < 0) {
+    printk(KERN_INFO "mrf89xa: spi_register_driver failed\n");
     goto err;
   }
-
-  printk(KERN_INFO "mrf89xa: probing spi device %p for mrf presence\n", spi);
-
-  for (i = 0; i < ARRAY_SIZE(por_register_values); i++) {
-    u8 got;
-    u8 expected = por_register_values[i];
-
-    gpiod_set_value(mrf89xa_device->config_pin, 0);
-    got = spi_w8r8(spi, CMD_READ_REGISTER(i));
-    gpiod_set_value(mrf89xa_device->config_pin, 1);
-
-    printk(KERN_INFO "mrf89xa: probing %d register. Got: %.2x, expected: %.2x\n", i, got, expected);
-    mrf89xa_found &= (got == expected);
-  }
-  if (mrf89xa_found | ignore_registers) {
-    /* success */
-    printk(KERN_INFO "mrf89xa: device found\n");
-    status = 0;
-
-    /* no need to lock, invoked only once from init */
-    mrf89xa_device->state |= MRF_STATE_DEVICEFOUND;
-  }
+  driver_registered = 1;
 
   /* check that probe succeed; no need to lock */
   if ( !(mrf89xa_device->state & MRF_STATE_DEVICEFOUND)) {
@@ -1132,13 +1187,21 @@ static int mrf89xa_probe(struct spi_device *spi) {
     goto err;
   }
 
+  /* create proc fs entry */
+  mrf89xa_device->proc_file = proc_create(DRV_NAME, 0, NULL, &mrf89xa_proc_fops);
+  if (! mrf89xa_device->proc_file ) {
+    printk(KERN_INFO "mrf89xa: could not initialize /proc/%s\n", DRV_NAME);
+    status = -ENOMEM;
+    goto err;
+  }
+
   /* all OK */
   printk(KERN_INFO "mrf89xa: initialization succeed\n");
-
-  return status;
+  return 0;
   
   err:
     printk(KERN_INFO "mrf89xa: failed\n");
+    if (driver_registered) spi_unregister_driver(&mrf89xa_driver);
     if (mrf89xa_dev && mrf89xa_dev->tx_worker) destroy_workqueue(mrf89xa_dev->tx_worker);
     if (cdev_added) cdev_del(&mrf89xa_device->cdev);
     if (device_id) unregister_chrdev_region(device_id, 1);
@@ -1148,56 +1211,6 @@ static int mrf89xa_probe(struct spi_device *spi) {
     if (mrf89xa_dev) kfree(mrf89xa_dev);
     mrf89xa_device = NULL;
     return status;
-}
-
-static int mrf89xa_remove(struct spi_device *spi) {
-  dev_t device_id;
-
-  printk(KERN_INFO "mrf89xa: removing module\n");
-
-  destroy_workqueue(mrf89xa_device->tx_worker);
-
-  device_id = mrf89xa_device->cdev.dev;
-  cdev_del(&mrf89xa_device->cdev);
-
-  printk(KERN_INFO "mrf89xa: character device removed\n");
-
-  unregister_chrdev_region(device_id, 1);
-  printk(KERN_INFO "mrf89xa: character device deallocated\n");
-
-  gpiod_put(mrf89xa_device->config_pin);
-  gpiod_put(mrf89xa_device->data_pin);
-  gpiod_put(mrf89xa_device->reset_pin);
-
-  printk(KERN_INFO "mrf89xa: mrf device memory deallocated\n");
-
-  kfree(mrf89xa_device);
-
-  return 0;
-}
-
-void mrf89xa_shutdown(struct spi_device *spi) {
-  printk(KERN_INFO "mrf89xa: shutdown callback\n");
-}
-
-static const struct spi_device_id mrf89xa_id[] = {
-  { DRV_NAME, 0 },
-  { }
-};
-
-static struct spi_driver mrf89xa_driver = {
-	.driver = {
-		.name =		DRV_NAME,
-		.owner =	THIS_MODULE,
-	},
-  .id_table = mrf89xa_id,
-	.probe = mrf89xa_probe,
-	.remove = mrf89xa_remove,
-  .shutdown = mrf89xa_shutdown,
-};
-
-static __init int mrf89xa_init(void) {
-  return spi_register_driver(&mrf89xa_driver);
 }
 
 static void __exit mrf89xa_exit(void) {  
