@@ -1071,6 +1071,8 @@ static const struct spi_device_id mrf89xa_id[] = {
   { }
 };
 
+MODULE_DEVICE_TABLE(spi, mrf89xa_id);
+
 static struct spi_driver mrf89xa_driver = {
 	.driver = {
 		.name =		DRV_NAME,
