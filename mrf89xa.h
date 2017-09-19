@@ -7,9 +7,6 @@
 
 #define MRF_DEBUG
 
-#define MRF_BROADCAST_NODEADDR 0x00
-#define MRF_FREQ_863_74 ( (114 << 3*8) | (90 << 2*8) | (73 << 1*8))
-
 #define MRF_TXPOWER_MINUS_8 ((0b111) << 1)
 #define MRF_TXPOWER_MINUS_5 ((0b110) << 1)
 #define MRF_TXPOWER_MINUS_2 ((0b101) << 1)
@@ -18,6 +15,8 @@
 #define MRF_TXPOWER_PLUS_7  ((0b010) << 1)
 #define MRF_TXPOWER_PLUS_10 ((0b001) << 1)
 #define MRF_TXPOWER_PLUS_13 (0)
+
+#define MRF_BROADCAST_NODEADDR 0x00
 
 #define MRF_MAX_PAYLOAD 64
 #define MRF_MAX_TX_QUEUE 10
@@ -78,10 +77,6 @@ typedef struct mrf89xa_frame {
 
 /* in milliseconds */
 #define MRF_IRQ_TX_TIMEOUT 50
-
-/* raspberry pi has just 0-bus */
-#define MRFSPI_BUS_NO 0
-
 
 #define CMD_READ_REGISTER(N) (0x40 | (N << 1))
 
