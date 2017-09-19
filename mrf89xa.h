@@ -82,11 +82,6 @@ typedef struct mrf89xa_frame {
 /* raspberry pi has just 0-bus */
 #define MRFSPI_BUS_NO 0
 
-/* 6 MHz */
-#define MRFSPI_CONFIG_SPEED (6000000*2)
-/* 1 MHz */
-#define MRFSPI_DATA_SPEED (900000)
-
 
 #define CMD_READ_REGISTER(N) (0x40 | (N << 1))
 

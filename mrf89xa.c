@@ -486,37 +486,20 @@ static struct file_operations mrf89xa_proc_fops = {
 
 static u8 read_register(u8 index) {
   u8 value;
-  u8 cmd_buff[] = {CMD_READ_REGISTER(index)};
-  struct spi_transfer t[] = {
-    {
-      .tx_buf	= &cmd_buff,
-      .len		= 1,
-      .speed_hz = MRFSPI_CONFIG_SPEED,
-    },
-    {
-      .rx_buf   = &value,
-      .len		= 1,
-      .speed_hz = MRFSPI_CONFIG_SPEED,
-    },
-  };
+  u8 cmd_buff[1] = {CMD_READ_REGISTER(index)};
   int status;
 
   gpiod_set_value(mrf89xa_device->config_pin, 0);
-  status = spi_sync_transfer(mrf89xa_device->spi, t, ARRAY_SIZE(t));
+  status = spi_write_then_read(mrf89xa_device->spi, cmd_buff, 1, &value, 1);
   gpiod_set_value(mrf89xa_device->config_pin, 1);
   return value;
 }
 static int write_register(u8 index, u8 value) {
-  u8 buff[] = {index << 1, value};
-  struct spi_transfer t = {
-    .tx_buf		= &buff,
-    .len		= ARRAY_SIZE(buff),
-    .speed_hz   = MRFSPI_CONFIG_SPEED,
-  };
+  u8 buff[2] = {index << 1, value};
   int status;
 
   gpiod_set_value(mrf89xa_device->config_pin, 0);
-  status = spi_sync_transfer(mrf89xa_device->spi, &t, 1);
+  status = spi_write(mrf89xa_device->spi, buff, 2);
   gpiod_set_value(mrf89xa_device->config_pin, 1);
 
   return status;
@@ -526,13 +509,8 @@ static int read_fifo(u8* destination, u8 length) {
   int i;
   int status = 0;
   for (i = 0; (i < length) && !status; i++) {
-    struct spi_transfer t = {
-      .rx_buf		= destination + i,
-      .len		= 1,
-      .speed_hz   = MRFSPI_DATA_SPEED,
-    };
     gpiod_set_value(mrf89xa_device->data_pin, 0);
-    status = spi_sync_transfer(mrf89xa_device->spi, &t, 1);
+    status = spi_read(mrf89xa_device->spi, destination + i, 1);
     gpiod_set_value(mrf89xa_device->data_pin, 1);
   }
   return status;
@@ -544,31 +522,22 @@ static int write_fifo(u8 address, u8 length, u8* data) {
   /* add address byte to the length of fifo buffer */
   u8 total_lenght = length + 1;
 
-  struct spi_transfer t = {
-    .tx_buf		= &total_lenght,
-    /* the same for all transfers */
-    .len		= 1,
-    .speed_hz   = MRFSPI_DATA_SPEED,
-  };
-
   /* trashfer length */
   gpiod_set_value(mrf89xa_device->data_pin, 0);
-  status = spi_sync_transfer(mrf89xa_device->spi, &t, 1);
+  status = spi_write(mrf89xa_device->spi, &total_lenght, 1);
   gpiod_set_value(mrf89xa_device->data_pin, 1);
   if (status) goto finish;
 
   /* trashfer address */
-  t.tx_buf = &address;
   gpiod_set_value(mrf89xa_device->data_pin, 0);
-  status = spi_sync_transfer(mrf89xa_device->spi, &t, 1);
+  status = spi_write(mrf89xa_device->spi, &address, 1);
   gpiod_set_value(mrf89xa_device->data_pin, 1);
   if (status) goto finish;
 
   /* by-byte transfer data */
   for (i = 0; i < length; i++) {
-    t.tx_buf = data + i;
     gpiod_set_value(mrf89xa_device->data_pin, 0);
-    status = spi_sync_transfer(mrf89xa_device->spi, &t, 1);
+    status = spi_write(mrf89xa_device->spi, data + i, 1);
     gpiod_set_value(mrf89xa_device->data_pin, 1);
     if (status) goto finish;
   }
@@ -971,7 +940,6 @@ static int cmd_setfreq(unsigned long arg) {
 
 long mrf89xa_ioctl_unlocked(struct file *filp, unsigned int cmd, unsigned long arg) {
   int status = 0;
-#define write_register_protected(ADDR, VALUE) status = write_register((ADDR), (VALUE)); if (status) goto finish;
 
   MRF_PRINT_DEBUG("ioctl (%d)\n", cmd);
 
@@ -1025,9 +993,10 @@ static int mrf89xa_probe(struct spi_device *spi) {
   for (i = 0; i < ARRAY_SIZE(por_register_values); i++) {
     u8 got;
     u8 expected = por_register_values[i];
+    u8 sent = CMD_READ_REGISTER(i);
 
     gpiod_set_value(mrf89xa_device->config_pin, 0);
-    got = spi_w8r8(spi, CMD_READ_REGISTER(i));
+    status = spi_write_then_read(spi, &sent, 1, &got, 1);
     gpiod_set_value(mrf89xa_device->config_pin, 1);
 
     printk(KERN_INFO "mrf89xa: probing %d register. Got: %.2x, expected: %.2x\n", i, got, expected);
