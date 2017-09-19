@@ -56,7 +56,7 @@ typedef struct mrf89xa_frame {
 
 /* in microseconds */
 #define RESET_DELAY 100
-#define RESET_WAIT  6000
+#define RESET_WAIT  5000
 
 #define MRF_CRYSTALL_FREQ 12800000
 

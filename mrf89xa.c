@@ -875,11 +875,11 @@ static int cmd_reset(int reinitialize) {
   gpiod_set_value(mrf89xa_device->reset_pin, 1);
 
   /* signal reset */
-  msleep(RESET_DELAY);
+  usleep_range(RESET_DELAY, RESET_DELAY+100);
 
   gpiod_set_value(mrf89xa_device->reset_pin, 0);
   /* wait until device will be up */
-  msleep(RESET_DELAY);
+  usleep_range(RESET_WAIT, RESET_WAIT+100);
 
   if (reinitialize) {
     status = initialize_registers();
