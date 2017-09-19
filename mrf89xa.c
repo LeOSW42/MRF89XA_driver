@@ -175,16 +175,16 @@ static int mrf89xa_open(struct inode *inode, struct file *filp) {
     }
     status = gpiod_direction_input(irq0_desc);
     if (status) {
-      MRF_PRINT_DEBUG("irq0 pin (%d) error setting input direction", IRQ1_PIN);
+      MRF_PRINT_DEBUG("irq0 pin (%d) error setting input direction", IRQ0_PIN);
       goto finish;
     }
-    irq0 = gpio_to_irq(IRQ0_PIN);
+    irq0 = gpiod_to_irq(irq0_desc);
     if (irq0 < 0) {
       status = irq0;
       printk(KERN_WARNING "mrf89xa: cannot get irq0 via %d pin (status: %d)\n", IRQ0_PIN, status);
       goto finish;
     }
-    status = request_irq(irq0, &irq0_handler, 0, mrf89xa_device_name, mrf89xa_device);
+    status = request_irq(irq0, &irq0_handler, IRQF_TRIGGER_RISING, mrf89xa_device_name, mrf89xa_device);
     if (status) goto finish;
     mrf89xa_device->irq0 = irq0;
     MRF_PRINT_DEBUG("irq0 %d\n", irq0);
@@ -206,10 +206,7 @@ static int mrf89xa_open(struct inode *inode, struct file *filp) {
       printk(KERN_WARNING "mrf89xa: cannot get irq1 via %d pin (status: %d)\n", IRQ1_PIN, status);
       goto finish;
     }
-
-    status = request_irq(irq1, &irq1_handler,
-                         IRQF_TRIGGER_RISING,
-                         mrf89xa_device_name, mrf89xa_device);
+    status = request_irq(irq1, &irq1_handler, IRQF_TRIGGER_RISING, mrf89xa_device_name, mrf89xa_device);
     if (status) goto finish;
     mrf89xa_device->irq1 = irq1;
     MRF_PRINT_DEBUG("irq1 %d\n", irq1);
