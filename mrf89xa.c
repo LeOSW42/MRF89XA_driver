@@ -1059,6 +1059,7 @@ static int mrf89xa_remove(struct spi_device *spi) {
   device_id = mrf89xa_device->cdev.dev;
   cdev_del(&mrf89xa_device->cdev);
   class_destroy(mrf89xa_device->device_class);
+  device_destroy(mrf89xa_device->device_class, device_id);
 
   printk(KERN_INFO "mrf89xa: character device removed\n");
 
@@ -1234,7 +1235,10 @@ static __init int mrf89xa_init(void) {
     if (mrf89xa_dev && mrf89xa_dev->data_pin && !IS_ERR_OR_NULL(mrf89xa_dev->data_pin)) gpiod_put(mrf89xa_dev->data_pin);
     if (mrf89xa_dev && mrf89xa_dev->reset_pin && !IS_ERR_OR_NULL(mrf89xa_dev->reset_pin)) gpiod_put(mrf89xa_dev->reset_pin);
     if (mrf89xa_dev) kfree(mrf89xa_dev);
-    if (mrf89xa_device->device_class != NULL) class_destroy(mrf89xa_device->device_class);
+    if (mrf89xa_device->device_class != NULL) {
+      class_destroy(mrf89xa_device->device_class);
+      device_destroy(mrf89xa_device->device_class, device_id);
+    }
     mrf89xa_device = NULL;
     return status;
 }
