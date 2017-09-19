@@ -66,6 +66,7 @@ MODULE_PARM_DESC(ignore_registers, "Ignore initial register values on probe.");
 
 struct mrf89xa_dev {
   struct cdev cdev;
+  struct class *device_class;
   spinlock_t state_lock;
   uint32_t state;
   atomic_t device_busy;
@@ -149,9 +150,10 @@ static u8 default_register_values[] = {
 };
 
 static int mrf89xa_open(struct inode *inode, struct file *filp) {
-  int status;
+  int status = 0;
   int state;
   struct gpio_desc *irq1_desc;
+  struct gpio_desc *irq0_desc;
 
   MRF_PRINT_DEBUG("open device %p\n", mrf89xa_device);
 
@@ -165,6 +167,17 @@ static int mrf89xa_open(struct inode *inode, struct file *filp) {
   if (! (state & MRF_STATE_DEVICEOPENED) ) {
     int irq0, irq1;
 
+
+    irq0_desc = gpio_to_desc(IRQ0_PIN);
+    if (IS_ERR_OR_NULL(irq0_desc)) {
+      printk(KERN_INFO "mrf89xa: irq0 pin (%d) not found", IRQ1_PIN);
+      goto finish;
+    }
+    status = gpiod_direction_input(irq0_desc);
+    if (status) {
+      MRF_PRINT_DEBUG("irq0 pin (%d) error setting input direction", IRQ1_PIN);
+      goto finish;
+    }
     irq0 = gpio_to_irq(IRQ0_PIN);
     if (irq0 < 0) {
       status = irq0;
@@ -1045,6 +1058,7 @@ static int mrf89xa_remove(struct spi_device *spi) {
 
   device_id = mrf89xa_device->cdev.dev;
   cdev_del(&mrf89xa_device->cdev);
+  class_destroy(mrf89xa_device->device_class);
 
   printk(KERN_INFO "mrf89xa: character device removed\n");
 
@@ -1089,7 +1103,6 @@ static __init int mrf89xa_init(void) {
   int driver_registered = 0, cdev_added = 0;
   struct mrf89xa_dev* mrf89xa_dev = NULL;
   dev_t device_id = 0;
-  struct class *device_class;
 
   printk(KERN_INFO "mrf89xa: loading module (ignore_registers = %d)\n", ignore_registers);
 
@@ -1176,10 +1189,10 @@ static __init int mrf89xa_init(void) {
   }
   cdev_added = 1;
 
-  device_class = class_create(THIS_MODULE, DRV_NAME);
-  device_create(device_class, NULL, device_id, NULL, "%s", DRV_NAME);
+  mrf89xa_device->device_class = class_create(THIS_MODULE, DRV_NAME);
+  device_create(mrf89xa_device->device_class, NULL, device_id, NULL, "%s", DRV_NAME);
 
-  if ( device_class == NULL ) {
+  if ( mrf89xa_device->device_class == NULL ) {
     printk(KERN_INFO "mrf89xa: device class creating error !\n");
     goto err;
   }
@@ -1221,6 +1234,7 @@ static __init int mrf89xa_init(void) {
     if (mrf89xa_dev && mrf89xa_dev->data_pin && !IS_ERR_OR_NULL(mrf89xa_dev->data_pin)) gpiod_put(mrf89xa_dev->data_pin);
     if (mrf89xa_dev && mrf89xa_dev->reset_pin && !IS_ERR_OR_NULL(mrf89xa_dev->reset_pin)) gpiod_put(mrf89xa_dev->reset_pin);
     if (mrf89xa_dev) kfree(mrf89xa_dev);
+    if (mrf89xa_device->device_class != NULL) class_destroy(mrf89xa_device->device_class);
     mrf89xa_device = NULL;
     return status;
 }
