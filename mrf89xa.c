@@ -113,7 +113,7 @@ DECLARE_WORK(frame_receiver, receive_frame_work);
 static u8 por_register_values[] = { 0x28, 0x88, 0x03, 0x07, 0x0C, 0x0F };
 
 static u8 default_register_values[] = {
-  /* 0 == REG_GCON         */ CHIPMODE_STBYMODE | FREQBAND_950_863 | VCO_TRIM_00,
+  /* 0 == REG_GCON         */ CHIPMODE_STBYMODE | FREQBAND_950_863 | VCO_TRIM_11,
   /* 1 == REG_DMOD         */ MODSEL_FSK | DATAMODE_PACKET | IFGAIN_0,
   /* 1 == REG_FDEV         */ FREGDEV_80,
   /* 3 == REG_BRS          */ BITRATE_40,
