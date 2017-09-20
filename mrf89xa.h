@@ -18,7 +18,7 @@
 
 #define MRF_BROADCAST_NODEADDR 0x00
 
-#define MRF_MAX_PAYLOAD 64
+#define PACKET_SIZE      16
 #define MRF_MAX_TX_QUEUE 10
 #define MRF_MAX_RX_QUEUE 10
 
@@ -29,8 +29,7 @@ typedef struct mrf89xa_address {
 
 
 typedef struct mrf89xa_frame {
-  uint8_t addr;
-  uint8_t data[MRF_MAX_PAYLOAD];
+  uint8_t data[PACKET_SIZE];
 } mrf89xa_frame;
 
 #define MRF_IOC_MAGIC 'n'
@@ -181,9 +180,12 @@ typedef struct mrf89xa_frame {
 #define DEF_IRQPARAM1				  0x08
 
 #define PASSIVEFILT_378           0xA0
+#define PASSIVEFILT_414           0xB0
 #define RXFC_FOPLUS100            0x03
+#define RXFC_FOPLUS150            0x05
 
 #define FO_100                    0x30
+#define FO_150                    0x50
 
 #define SYNC_ON						0x20
 #define SYNC_SIZE_8					0x00
@@ -198,12 +200,14 @@ typedef struct mrf89xa_frame {
 #define DEF_RXPARAM3				0x07
 
 #define FC_400                     0xF0
+#define FC_200                     0x70
 
 #define CLKOUT_OFF                0x00
 
 #define MANCHESTER_ON				0x80
 #define MANCHESTER_OFF				0x00
 
+#define PAYLOAD_16                16
 #define PAYLOAD_64                64
 
 #define PKT_FORMAT_FIXED			0x00
@@ -220,6 +224,7 @@ typedef struct mrf89xa_frame {
 #define CRC_OFF						0x00
 
 #define ADRSFILT_ME_AND_00_AND_FF	0x06	/* Node_adrs and 0x00 and 0xff accepted */
+#define ADRSFILT_NONE				0x00
 
 #define FIFO_AUTOCLR_ON				0x00
 #define FIFO_STBY_ACCESS_WRITE		0x00

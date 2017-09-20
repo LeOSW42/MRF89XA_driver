@@ -41,7 +41,7 @@ static u8 read_register(u8 index);
 static irqreturn_t irq0_handler(int, void *);
 static irqreturn_t irq1_handler(int, void *);
 static int set_chip_mode(u8 mode);
-static int write_fifo(u8 address, u8 length, u8* data);
+static int write_fifo(u8 length, u8* data);
 static void tx_timeout(unsigned long);
 
 static void _device_acquire(void);
@@ -51,7 +51,7 @@ static void transfer_work(struct work_struct *work);
 static void rx_switch_work(struct work_struct *work);
 static void receive_frame_work(struct work_struct *work);
 
-static int transfer_data(u8 address, u8 length, u8* data);
+static int transfer_data(u8 length, u8* data);
 
 
 static int ignore_registers = 0;
@@ -99,8 +99,6 @@ struct mrf89xa_dev {
 
 /* mimics mrf89xa_frame, but embeds size and list */
 struct mrf89xa_payload {
-  u8 addr;
-  u8 size;
   u8 data[PAYLOAD_64];
   struct list_head list_item;
 };
@@ -115,15 +113,15 @@ DECLARE_WORK(frame_receiver, receive_frame_work);
 static u8 por_register_values[] = { 0x28, 0x88, 0x03, 0x07, 0x0C, 0x0F };
 
 static u8 default_register_values[] = {
-  /* 0 == REG_GCON         */ CHIPMODE_STBYMODE | FREQBAND_950_863 | VCO_TRIM_11,
+  /* 0 == REG_GCON         */ CHIPMODE_STBYMODE | FREQBAND_950_863 | VCO_TRIM_00,
   /* 1 == REG_DMOD         */ MODSEL_FSK | DATAMODE_PACKET | IFGAIN_0,
   /* 1 == REG_FDEV         */ FREGDEV_80,
-  /* 3 == REG_BRS          */ BITRATE_25,
+  /* 3 == REG_BRS          */ BITRATE_40,
   /* 4 == REG_FLTH         */ 0 /* unused with FSK-modulation */,
-  /* 5 == REG_FIFO         */ FIFOSIZE_64,
-  /* 6 == REG_R1C          */ 0 /* frequency will be defined later */,
-  /* 7 == REG_P1C          */ 0 /* frequency will be defined later */,
-  /* 8 == REG_S1C          */ 0 /* frequency will be defined later */,
+  /* 5 == REG_FIFO         */ FIFOSIZE_16,
+  /* 6 == REG_R1C          */ 125 /* frequency will be defined later */,
+  /* 7 == REG_P1C          */ 100 /* frequency will be defined later */,
+  /* 8 == REG_S1C          */ 20  /* frequency will be defined later */,
   /* 9, unused             */ 0,
   /* 10, unused            */ 0,
   /* 11, unused            */ 0,
@@ -131,21 +129,21 @@ static u8 default_register_values[] = {
   /* 13 == REG_FTXRXI      */ IRQ0_RX_STDBY_SYNCADRS | IRQ1_RX_STDBY_CRCOK | IRQ1_TX_TXDONE,
   /* 14 == REG_FTPRI       */ DEF_IRQPARAM1 | IRQ0_TX_START_FIFONOTEMPTY | IRQ1_PLL_LOCK_PIN_ON,
   /* 15, unused            */ 0,
-  /* 16 == REG_FILC        */ PASSIVEFILT_378 | RXFC_FOPLUS100,
-  /* 17 == REG_PFC         */ FO_100,
+  /* 16 == REG_FILC        */ PASSIVEFILT_414 | RXFC_FOPLUS150,
+  /* 17 == REG_PFC         */ FO_150,
   /* 18 == REG_SYNC        */ SYNC_SIZE_32 | SYNC_ON | SYNC_ERRORS_0,
   /* 19, reserved          */ DEF_RXPARAM3,
   /* 20, r/0               */ 0,
   /* 21, unused            */ 0 /* unused with FSK-modulation */,
-  /* 22 == REG_SYNC_WORD_1 */ 0 /* network will be defined later */,
-  /* 23 == REG_SYNC_WORD_2 */ 0 /* network will be defined later */,
-  /* 24 == REG_SYNC_WORD_3 */ 0 /* network will be defined later */,
-  /* 25 == REG_SYNC_WORD_4 */ 0 /* network will be defined later */,
-  /* 26 == REG_TXCON       */ FC_400 | MRF_TXPOWER_PLUS_13,
+  /* 22 == REG_SYNC_WORD_1 */ 0x53 /* network will be defined later */,
+  /* 23 == REG_SYNC_WORD_2 */ 0x59 /* network will be defined later */,
+  /* 24 == REG_SYNC_WORD_3 */ 0x4E /* network will be defined later */,
+  /* 25 == REG_SYNC_WORD_4 */ 0x43 /* network will be defined later */,
+  /* 26 == REG_TXCON       */ FC_200 | MRF_TXPOWER_PLUS_13,
   /* 27 == REG_CLKOUT      */ CLKOUT_OFF /* not needed*/,
-  /* 28 == REG_PLOAD       */ MANCHESTER_OFF | PAYLOAD_64,
-  /* 29 == REG_NADDS       */ 0 /* node address will be defined later */,
-  /* 30 == REG_PKTC        */ PKT_FORMAT_VARIABLE | PREAMBLE_SIZE_4 | WHITENING_OFF | CRC_ON | ADRSFILT_ME_AND_00_AND_FF,
+  /* 28 == REG_PLOAD       */ MANCHESTER_ON | PAYLOAD_16,
+  /* 29 == REG_NADDS       */ 0 /* unused */,
+  /* 30 == REG_PKTC        */ PKT_FORMAT_FIXED | PREAMBLE_SIZE_4 | WHITENING_OFF | CRC_ON | ADRSFILT_NONE,
   /* 31 == REG_FCRC        */ FIFO_AUTOCLR_ON | FIFO_STBY_ACCESS_WRITE,
 };
 
@@ -274,7 +272,6 @@ static int mrf89xa_release(struct inode *inode, struct file *filp) {
 
 static ssize_t mrf89xa_write(struct file *filp, const char *buff, size_t length, loff_t * offset) {
   int status;
-  int data_size;
   u8 dest;
   int queue_size = -1;
   struct mrf89xa_payload *payload = NULL;
@@ -288,10 +285,8 @@ static ssize_t mrf89xa_write(struct file *filp, const char *buff, size_t length,
   }
 
   /* check input data */
-  data_size = length - sizeof(((mrf89xa_frame*)0)->addr);
-  if (data_size <= 0) {
-    /* nothing to send? */
-    printk(KERN_WARNING "mrf89xa: write: wrong data size %d)\n", data_size);
+  if (length != PACKET_SIZE) {
+    printk(KERN_WARNING "mrf89xa: write: wrong data size %d\n", length);
     status = -EINVAL;
     goto finish;
   }
@@ -307,13 +302,11 @@ static ssize_t mrf89xa_write(struct file *filp, const char *buff, size_t length,
 
   status = __get_user(dest, (u8*)buff);
   if (status) { goto finish; }
-  payload->addr = dest;
 
-  if (copy_from_user(&payload->data, buff + sizeof(u8), data_size)) {
+  if (copy_from_user(&payload->data, buff + sizeof(u8), PACKET_SIZE)) {
      status = -EFAULT;
      goto finish;
   }
-  payload->size = data_size;
 
   /* check complete */
 
@@ -332,13 +325,13 @@ static ssize_t mrf89xa_write(struct file *filp, const char *buff, size_t length,
     /* if queue_size is greater, than worker is alrady in progress */
     queue_work(mrf89xa_device->tx_worker, &tx_processor);
   }
-  status = length;
+  status = 0;
 
  finish:
   up(&mrf89xa_device->driver_semaphore);
   if (status <0 && payload) kfree(payload);
   MRF_PRINT_DEBUG(" write status = %d, queue size = %d, length = %d\n",
-         status, queue_size, length);
+         status, queue_size, PACKET_SIZE);
   return status;
 }
 
@@ -356,8 +349,8 @@ static ssize_t mrf89xa_read(struct file *filp, char *buff, size_t length, loff_t
   }
 
   /* check input data */
-  if (length != sizeof(mrf89xa_frame)) {
-    printk(KERN_WARNING "mrf89xa: read: wrong data size %d)\n", length);
+  if (length != PACKET_SIZE) {
+    printk(KERN_WARNING "mrf89xa: read: wrong data size %d\n", length);
     status = -EINVAL;
     goto finish;
   }
@@ -375,16 +368,13 @@ static ssize_t mrf89xa_read(struct file *filp, char *buff, size_t length, loff_t
   atomic_dec(&mrf89xa_device->rx_queue_size);
   spin_unlock(&mrf89xa_device->rx_queue_lock);
 
-  status = __put_user(payload->addr, &frame->addr);
-  if (status) { goto finish; }
-
-  if (copy_to_user(&frame->data, payload->data, payload->size)) {
+  if (copy_to_user(&frame->data, payload->data, PACKET_SIZE)) {
      status = -EFAULT;
      goto finish;
   }
 
   /* all OK */
-  status = payload->size + sizeof(((mrf89xa_frame*)0)->addr);
+  status = 0;
 
  finish:
   if (payload) kfree(payload);
@@ -513,23 +503,9 @@ static int read_fifo(u8* destination, u8 length) {
   return status;
 }
 
-static int write_fifo(u8 address, u8 length, u8* data) {
+static int write_fifo(u8 length, u8* data) {
   int status;
   u8 i;
-  /* add address byte to the length of fifo buffer */
-  u8 total_lenght = length + 1;
-
-  /* trashfer length */
-  gpiod_set_value(mrf89xa_device->data_pin, 0);
-  status = spi_write(mrf89xa_device->spi, &total_lenght, 1);
-  gpiod_set_value(mrf89xa_device->data_pin, 1);
-  if (status) goto finish;
-
-  /* trashfer address */
-  gpiod_set_value(mrf89xa_device->data_pin, 0);
-  status = spi_write(mrf89xa_device->spi, &address, 1);
-  gpiod_set_value(mrf89xa_device->data_pin, 1);
-  if (status) goto finish;
 
   /* by-byte transfer data */
   for (i = 0; i < length; i++) {
@@ -649,7 +625,6 @@ static void _device_release(void) {
 
 static void receive_frame_work(struct work_struct *unused) {
   u8 access;
-  u8 length_address[2];
   int status = 0;
   int queue_size;
   struct mrf89xa_payload *frame = 0;
@@ -668,21 +643,14 @@ static void receive_frame_work(struct work_struct *unused) {
     printk(KERN_WARNING "error switch to fifo read mode: %d", status);
     goto finish;
   }
-  status = read_fifo(length_address, 2);
-  if (status) {
-    printk(KERN_WARNING "error reading frame from fifo length and address: %d", status);
-    goto finish;
-  }
 
   frame = kzalloc(sizeof(struct mrf89xa_payload), GFP_KERNEL);
   if (!frame) {
     printk(KERN_WARNING "error allocating memory for frame: %d", status);
     goto finish;
   }
-  frame->addr = length_address[1];
-  frame->size = length_address[0];
 
-  status = read_fifo(frame->data, frame->size);
+  status = read_fifo(frame->data, PACKET_SIZE);
   if (status) {
     printk(KERN_WARNING "error reading frame payload %d", status);
     goto finish;
@@ -706,8 +674,8 @@ static void receive_frame_work(struct work_struct *unused) {
     goto finish;
   }
 
-  MRF_PRINT_DEBUG("frame (%d bytes) has been successfully received from %d, in queue = %d frames \n",
-                  frame->size, frame->addr, queue_size);
+  MRF_PRINT_DEBUG("frame (%d bytes) has been successfully received, in queue = %d frames \n",
+                  PACKET_SIZE, queue_size);
 
  finish:
   _device_release();
@@ -751,7 +719,7 @@ static void transfer_work(struct work_struct *unused) {
     list_del(&payload->list_item);
     spin_unlock(&mrf89xa_device->tx_queue_lock);
 
-    status = transfer_data(payload->addr, payload->size, payload->data);
+    status = transfer_data(PACKET_SIZE, payload->data);
     if (status) {
       printk(KERN_WARNING "mrf89xa: error transfer data: %d\n", status);
     }
@@ -765,7 +733,7 @@ static void transfer_work(struct work_struct *unused) {
 }
 
 
-static int transfer_data(u8 address, u8 length, u8* data) {
+static int transfer_data(u8 length, u8* data) {
   int status;
   u8 access;
 
@@ -795,7 +763,7 @@ static int transfer_data(u8 address, u8 length, u8* data) {
   mrf89xa_device->state |= MRF_STATE_TRANSMITTING;
   spin_unlock(&mrf89xa_device->state_lock);
 
-  if ((status = write_fifo(address, length, data))) {
+  if ((status = write_fifo(length, data))) {
     goto finish;
   }
   if ((status = set_chip_mode(CHIPMODE_TX))) {
@@ -903,8 +871,7 @@ static int cmd_setpower(uint8_t value) {
 
 static int cmd_debug(unsigned long arg) {
   u8 data[5] = {0x1, 0x2, 0x3, 0x4, 0xFF};
-  u8 dst = 0x0; /* broadcast address */
-  return transfer_data(dst, ARRAY_SIZE(data), data);
+  return transfer_data(ARRAY_SIZE(data), data);
 }
 
 static int cmd_listen(void) {
