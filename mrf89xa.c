@@ -113,7 +113,7 @@ DECLARE_WORK(frame_receiver, receive_frame_work);
 static u8 por_register_values[] = { 0x28, 0x88, 0x03, 0x07, 0x0C, 0x0F };
 
 static u8 default_register_values[] = {
-  /* 0 == REG_GCON         */ CHIPMODE_STBYMODE | FREQBAND_950_863 | VCO_TRIM_11,
+  /* 0 == REG_GCON         */ CHIPMODE_STBYMODE | FREQBAND_950_863 | VCO_TRIM_00,
   /* 1 == REG_DMOD         */ MODSEL_FSK | DATAMODE_PACKET | IFGAIN_0,
   /* 1 == REG_FDEV         */ FREGDEV_80,
   /* 3 == REG_BRS          */ BITRATE_40,
@@ -143,7 +143,7 @@ static u8 default_register_values[] = {
   /* 27 == REG_CLKOUT      */ CLKOUT_OFF /* not needed*/,
   /* 28 == REG_PLOAD       */ MANCHESTER_ON | PAYLOAD_16,
   /* 29 == REG_NADDS       */ 0 /* unused */,
-  /* 30 == REG_PKTC        */ PKT_FORMAT_FIXED | PREAMBLE_SIZE_4 | WHITENING_OFF | CRC_ON | ADRSFILT_NONE,
+  /* 30 == REG_PKTC        */ PKT_FORMAT_FIXED | PREAMBLE_SIZE_4 | WHITENING_ON | CRC_ON | ADRSFILT_NONE,
   /* 31 == REG_FCRC        */ FIFO_AUTOCLR_ON | FIFO_STBY_ACCESS_WRITE,
 };
 
@@ -303,7 +303,7 @@ static ssize_t mrf89xa_write(struct file *filp, const char *buff, size_t length,
   status = __get_user(dest, (u8*)buff);
   if (status) { goto finish; }
 
-  if (copy_from_user(&payload->data, buff + sizeof(u8), PACKET_SIZE)) {
+  if (copy_from_user(&payload->data, buff, length)) {
      status = -EFAULT;
      goto finish;
   }
@@ -506,7 +506,6 @@ static int read_fifo(u8* destination, u8 length) {
 static int write_fifo(u8 length, u8* data) {
   int status;
   u8 i;
-
   /* by-byte transfer data */
   for (i = 0; i < length; i++) {
     gpiod_set_value(mrf89xa_device->data_pin, 0);

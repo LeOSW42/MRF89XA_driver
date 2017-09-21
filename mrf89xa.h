@@ -18,7 +18,7 @@
 
 #define MRF_BROADCAST_NODEADDR 0x00
 
-#define PACKET_SIZE      15
+#define PACKET_SIZE      16
 #define MRF_MAX_TX_QUEUE 10
 #define MRF_MAX_RX_QUEUE 10
 
