@@ -321,8 +321,7 @@ static ssize_t mrf89xa_write(struct file *filp, const char *buff, size_t length,
 
   queue_size = atomic_inc_return(&mrf89xa_device->tx_queue_size);
 
-  if (queue_size == 1) {
-    /* if queue_size is greater, than worker is alrady in progress */
+  if (queue_size >= 1) {
     queue_work(mrf89xa_device->tx_worker, &tx_processor);
   }
   status = 0;
@@ -558,11 +557,10 @@ static irqreturn_t irq0_handler(int a, void *b) {
 
 /* assumption: device is already acquired */
 static irqreturn_t irq1_handler(int a, void *b) {
-  MRF_PRINT_DEBUG("irq1_handler\n");
-
   spin_lock(&mrf89xa_device->state_lock);
   if ( mrf89xa_device->state & MRF_STATE_TRANSMITTING ) {
     int do_listen = 0;
+    MRF_PRINT_DEBUG("irq1_handler: TX\n");
     mrf89xa_device->state &= ~MRF_STATE_TRANSMITTING;
     do_listen = mrf89xa_device->state & MRF_STATE_LISTENING;
     spin_unlock(&mrf89xa_device->state_lock);
@@ -575,7 +573,7 @@ static irqreturn_t irq1_handler(int a, void *b) {
     del_timer(&mrf89xa_device->tx_timeout_timer);
   } else if (mrf89xa_device->state & MRF_STATE_LISTENING ) {
     int acquired = atomic_read(&mrf89xa_device->device_busy) == 0;
-    if (acquired) atomic_inc(&mrf89xa_device->device_busy);
+    MRF_PRINT_DEBUG("irq1_handler: RX\n");
     spin_unlock(&mrf89xa_device->state_lock);
     /* frame could be transmitting, then ignore frame */
     if (!acquired) {
@@ -630,6 +628,8 @@ static void receive_frame_work(struct work_struct *unused) {
 
   MRF_PRINT_DEBUG("receive_frame_work\n");
 
+  _device_acquire();
+
   /* device ias already aquired in irq1_handler */
   if ((status = set_chip_mode(CHIPMODE_STBYMODE))) {
     printk(KERN_WARNING "error switch to stand-by mode: %d", status);
@@ -661,6 +661,7 @@ static void receive_frame_work(struct work_struct *unused) {
   queue_size = atomic_inc_return(&mrf89xa_device->rx_queue_size);
   if (queue_size > MRF_MAX_RX_QUEUE) {
     struct mrf89xa_payload *dropped_frame = list_first_entry(&mrf89xa_device->rx_queue, struct mrf89xa_payload, list_item);
+    MRF_PRINT_DEBUG("One frame have been removed. RX queue is full.\n");
     list_del(&dropped_frame->list_item);
     kfree(dropped_frame);
     queue_size = atomic_dec_return(&mrf89xa_device->rx_queue_size);
